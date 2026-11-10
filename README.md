@@ -13,6 +13,21 @@ spawned session.
 The interface is in French (labels such as « Fichiers », « Coût », « Plein
 écran »); this README quotes those strings as they appear.
 
+## Screenshots
+
+All screenshots show demo data (fictional projects, people and merge requests).
+
+![Chat view of a session, with the Files tab rendering an HTML report](docs/media/01-files.jpg)
+
+| | |
+|---|---|
+| ![Git panel: side-by-side diff of a commit](docs/media/02-git.jpg) | ![GitLab merge request review with a discussion thread](docs/media/03-mr-review.jpg) |
+| **Git panel** — branches, history and diffs without leaving the deck | **MR review** — files, threads, drafts and « Demander à Claude » on a diff |
+| ![Room: sessions messaging each other](docs/media/04-room.jpg) | ![Usage page: estimated cost and tokens over 7 days](docs/media/05-usage.jpg) |
+| **Room** — live sessions talk to each other through a shared feed | **Usage** — cost and token estimates at API list prices, quota windows |
+| ![Plugins panel showing a daily report](docs/media/06-plugins.jpg) | |
+| **Plugins** — run a folder plugin daily or on demand, read its HTML report | |
+
 ## Features
 
 - **Terminal grid** — multiple live `claude` panes (node-pty + xterm.js), with
