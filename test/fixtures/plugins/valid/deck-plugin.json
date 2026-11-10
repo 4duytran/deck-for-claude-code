@@ -1,0 +1,11 @@
+{
+  "id": "sample-report",
+  "label": "Rapport d'exemple",
+  "description": "Plugin d'exemple pour les sondes d'import et de suppression.",
+  "argv": ["run.sh"],
+  "trigger": "manual",
+  "env": [
+    { "name": "API_TOKEN", "label": "Jeton d'API", "required": true, "hints": ["API", "TOKEN"] },
+    { "name": "API_URL", "label": "Adresse de l'API", "required": false, "hints": ["API", "URL"] }
+  ]
+}

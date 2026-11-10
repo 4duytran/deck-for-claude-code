@@ -1,0 +1,441 @@
+/* Git panel history view (deck-git-log): branches | history graph | commit detail.
+   Linked after style.css. Targets the DOM built by git-graph.js, git-refs.js and git-commit.js.
+   Colours only through tokens (tokens.css, the style.css aliases, local --glog-* names);
+   motion on transform / opacity only; no coloured left accent bar anywhere (a selection
+   is a full ring, never a side stripe). */
+
+#git-panel {
+  --glog-mono: var(--font-mono);
+  --glog-surface: color-mix(in srgb, white 3%, var(--c-page));
+  --glog-surface-deep: color-mix(in srgb, white 1.5%, var(--c-page));
+  --glog-indigo-soft: color-mix(in srgb, var(--s-agent), white 40%);
+  --glog-sel-fill: color-mix(in srgb, var(--c-accent) 8%, transparent);
+  --glog-sel-ring: color-mix(in srgb, var(--c-accent) 22%, transparent);
+}
+
+/* [hidden] must beat every display below. */
+.glog-cols[hidden], .glog-diff[hidden], #glog-wip-head[hidden], #glog-commit[hidden], #glog-badge[hidden], #glog-state[hidden], #glog-state:empty,
+#glog-refs [hidden], .glog-view [hidden], #glog-detail [hidden] { display: none !important; }
+
+/* --- Layout: the three columns of #gp-body (the .mr-cols pattern) ------------- */
+.glog-cols {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) minmax(280px, 380px);
+  grid-template-rows: minmax(0, 1fr);
+  font-size: 13px;
+  line-height: 1.45;
+}
+#glog-refs, #glog-log, #glog-detail {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+#glog-refs { gap: 4px; padding: 14px 10px; border-right: 1px solid var(--border); overflow: auto; }
+#glog-log { position: relative; overflow: hidden; container: glog-log / inline-size; }
+#glog-detail { gap: 16px; padding: 18px 18px 22px; border-left: 1px solid var(--border); overflow: auto; }
+
+/* Under the side panel's own container: below three columns' worth, stack them. */
+@container sp (max-width: 859px) {
+  .glog-cols { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 28%) minmax(0, 1fr) minmax(0, 36%); }
+  #glog-refs { border-right: 0; border-bottom: 1px solid var(--border); }
+  #glog-detail { border-left: 0; border-top: 1px solid var(--border); }
+}
+
+:is(.glog-cols, #gp-head) :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.glog-row:focus-visible, .glog-file:focus-visible, .glog-ref:focus-visible { outline-offset: -2px; }
+.glog-filter::placeholder, .glog-ref-search::placeholder { color: var(--text-faint); }
+.glog-cols svg { flex: none; }
+
+/* Shared section label (F1): sentence case, no spaced capitals. */
+.glog-title, .glog-ref-title, .glog-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* Text fields. */
+.glog-filter, .glog-ref-search {
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: var(--c-panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.glog-filter { flex: 0 1 220px; margin-left: auto; }
+
+/* --- Header chips (#gp-head) --------------------------------------------------- */
+#glog-badge, #glog-state {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 22px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+/* D18 (no capsule anywhere): the head chips are coloured words, box and size unchanged. */
+#glog-badge[data-current="true"] { color: var(--accent); }
+#glog-state { height: 24px; padding: 0 10px; font-size: 11.5px; color: var(--text); }
+#glog-state:is([data-state="level"], [data-state="trunk-level"]) { color: var(--c-ok); }
+#glog-state:is([data-state="diverged"], [data-state="trunk-behind"]) { color: var(--c-waiting); }
+
+/* --- Branch column (nav#glog-refs is the flex column) --------------------------- */
+.glog-ref-searchbox { position: relative; display: block; margin-bottom: 8px; }
+.glog-ref-search-ico { position: absolute; inset: 0 auto 0 10px; display: flex; align-items: center; color: var(--text-faint); pointer-events: none; }
+.glog-ref-search-ico .glog-ref-ico { width: 14px; height: 14px; }
+.glog-ref-search { display: block; width: 100%; height: 32px; padding-left: 32px; }
+.glog-ref-section { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.glog-ref-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px 4px; }
+.glog-ref-fold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.glog-ref-fold:hover { background: var(--c-panel-2); color: var(--text); }
+.glog-ref-fold .glog-ref-ico { width: 12px; height: 12px; transition: transform var(--dur-pop) var(--ease-out); }
+.glog-ref-fold[aria-expanded="false"] .glog-ref-ico { transform: rotate(-90deg); }
+.glog-ref-items { display: flex; flex-direction: column; gap: 2px; }
+.glog-ref {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.glog-ref .glog-ref-ico { width: 14px; height: 14px; color: var(--text-faint); }
+.glog-ref-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.glog-ref:hover { background: var(--c-panel-2); }
+.glog-ref[aria-current="true"] { background: var(--glog-sel-fill); box-shadow: inset 0 0 0 1px var(--glog-sel-ring); }
+.glog-ref[aria-current="true"] .glog-ref-ico { color: var(--accent); }
+.glog-head-badge {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+.glog-ro-note { margin: auto 0 0; padding: 14px 10px 2px; font-size: 11.5px; line-height: 1.5; color: var(--text-muted); }
+.glog-ref-empty { margin: 0; padding: 8px 10px; font-size: 12px; color: var(--text-muted); }
+
+/* --- History column: view, head, legend, list ----------------------------------- */
+.glog-view { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.glog-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 14px 18px 10px; }
+.glog-count { font-size: 12px; color: var(--text-muted); }
+.glog-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.glog-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+.glog-legend-dot { flex: none; box-sizing: border-box; width: 9px; height: 9px; border-radius: 999px; background: var(--text-faint); }
+.glog-legend-dot[data-kind="branch"] { background: var(--accent); }
+.glog-legend-dot[data-kind="trunk-only"] { background: var(--s-agent); }
+.glog-legend-dot[data-kind="shared"] { width: 7px; height: 7px; background: var(--text-faint); }
+.glog-legend-dot[data-kind="incoming"] { width: 10px; height: 10px; background: none; border: 0; box-shadow: inset 0 0 0 1.5px var(--s-agent); }
+
+.glog-list { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; padding: 0 10px 14px; overflow: auto; }
+.glog-empty { margin: 0; padding: 28px 12px; text-align: center; font-size: 12.5px; color: var(--text-muted); }
+.glog-row {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 42px;
+  margin: 0;
+  padding: 0 14px 0 6px;
+  border: 0;
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.glog-row:hover { background: var(--c-panel-2); }
+.glog-row:is(.sel, [aria-current="true"]), .glog-row:is(.sel, [aria-current="true"]):hover { background: var(--glog-sel-fill); box-shadow: inset 0 0 0 1px var(--glog-sel-ring); }
+
+/* Graph: two 2px lanes (0 = trunk, 1 = shown branch), each an up and a down half meeting at the dot. */
+.glog-graph { position: relative; flex: none; width: 44px; height: 100%; }
+.glog-lane { position: absolute; width: 2px; background: var(--border-strong); }
+.glog-lane[data-lane="0"] { left: 11px; }
+.glog-lane[data-lane="1"] { left: 31px; }
+.glog-lane[data-half="up"] { top: 0; bottom: 50%; }
+.glog-lane[data-half="down"] { top: 50%; bottom: 0; }
+.glog-lane[data-kind="branch"] { background: color-mix(in srgb, var(--c-accent) 50%, transparent); }
+.glog-lane[data-kind="trunk-only"] { background: color-mix(in srgb, var(--s-agent) 55%, transparent); }
+.glog-lane[data-kind="shared"] { background: var(--border-strong); }
+.glog-lane[data-kind="incoming"] {
+  background: repeating-linear-gradient(to bottom, color-mix(in srgb, var(--s-agent) 65%, transparent) 0 3px, color-mix(in srgb, var(--s-agent) 0%, transparent) 3px 6px);
+}
+.glog-lane[data-kind="wip"] {
+  background: repeating-linear-gradient(to bottom, color-mix(in srgb, var(--c-accent) 60%, transparent) 0 3px, color-mix(in srgb, var(--c-accent) 0%, transparent) 3px 6px);
+}
+.glog-join {
+  position: absolute;
+  left: 12px;
+  top: 0;
+  box-sizing: border-box;
+  width: 21px;
+  height: 21px;
+  border-right: 2px solid color-mix(in srgb, var(--c-accent) 50%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--c-accent) 50%, transparent);
+  border-bottom-right-radius: 12px;
+}
+.glog-dot {
+  position: absolute;
+  top: 50%;
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--text-faint);
+  transform: translate(-50%, -50%);
+}
+.glog-dot[data-lane="0"] { left: 12px; }
+.glog-dot[data-lane="1"] { left: 32px; }
+.glog-dot[data-kind="branch"] { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-accent) 16%, transparent); }
+.glog-dot[data-kind="trunk-only"] { background: var(--s-agent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--s-agent) 16%, transparent); }
+.glog-dot[data-kind="shared"] { width: 8px; height: 8px; background: var(--text-faint); }
+/* A hollow dot is an inset ring of the lane colour, never a coloured border (F1). */
+.glog-dot[data-kind="wip"] { width: 12px; height: 12px; border: 0; background: var(--glog-surface); box-shadow: inset 0 0 0 2px var(--accent); }
+.glog-dot-dashed, .glog-dot[data-kind="incoming"] { width: 11px; height: 11px; border: 0; background: var(--glog-surface); box-shadow: inset 0 0 0 1.5px var(--s-agent); }
+/* The trunk's own tip gets a heavier ring. */
+.glog-dot[data-trunk="true"] { width: 12px; height: 12px; border: 0; background: var(--glog-surface); box-shadow: inset 0 0 0 2px var(--s-agent); }
+/* The diff library's state tag is hidden (style.css) but keeps a coloured border in the cascade: none (F1). */
+#gp-diff .d2h-tag { border: 0; background: none; }
+
+/* Row text. */
+.glog-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.glog-subject { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.glog-row[data-seg="branch"] .glog-subject { color: var(--text); font-weight: 500; }
+.glog-row:is([data-seg="trunk-only"], [data-seg="incoming"]) .glog-subject { color: var(--glog-indigo-soft); }
+.glog-row[data-seg="wip"] .glog-subject { color: var(--accent); font-weight: 600; }
+.glog-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  max-width: 18em;
+  height: 20px;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text);
+}
+/* D18 (no capsule anywhere): ref tags and the file count are coloured words, box and size unchanged. */
+.glog-chip[data-kind="branch"] { color: var(--accent); }
+.glog-chip:is([data-kind="develop"], [data-kind="origin-develop"]) { color: var(--glog-indigo-soft); }
+.glog-chip[data-kind="wip"] { color: var(--accent); }
+.glog-author, .glog-date, .glog-sha { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-muted); }
+.glog-author { width: 112px; margin-left: auto; }
+.glog-date { width: 92px; }
+.glog-sha { width: 60px; font-family: var(--glog-mono); font-size: 11.5px; }
+@container glog-log (max-width: 560px) { .glog-author { display: none; } }
+@container glog-log (max-width: 440px) { .glog-date { display: none; } }
+
+.glog-foot { flex: none; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 0 6px; }
+.glog-more {
+  flex: none;
+  height: 32px;
+  margin: 0;
+  padding: 0 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.glog-more:hover { background: var(--c-panel-2); color: var(--text); }
+.glog-more-note { flex: none; margin: 0; padding: 0 10px; text-align: center; font-size: 12px; color: var(--text-muted); }
+
+/* --- File diff overlay (covers the history column) ------------------------------ */
+.glog-diff {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--glog-surface-deep);
+  border-right: 1px solid var(--border);
+  animation: glog-diff-in var(--dur-pop) var(--ease-out) backwards;
+}
+@keyframes glog-diff-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.glog-diff-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.glog-diff-back, .glog-diff-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 30px;
+  border: 0;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.glog-diff-back { gap: 6px; padding: 0 12px; background: var(--c-panel-2); color: var(--text); }
+.glog-diff-close { width: 30px; margin-left: auto; background: none; color: var(--text-muted); }
+.glog-diff-back:hover { background: var(--c-hairline-strong); }
+.glog-diff-close:hover { background: var(--c-panel-2); color: var(--text); }
+#glog-diff #gp-diff { flex: 1 1 0; min-height: 0; overflow: auto; background: none; }
+
+/* --- Detail column -------------------------------------------------------------- */
+#glog-wip-head, #glog-commit { display: flex; flex-direction: column; gap: 12px; }
+#glog-wip-head { gap: 8px; }
+#glog-wip-head .glog-kicker { color: var(--accent); }
+#glog-wip-head h2 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; color: var(--text); }
+#glog-wip-head p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-muted); }
+.glog-kicker[data-seg="branch"] { color: var(--accent); }
+.glog-kicker:is([data-seg="trunk-only"], [data-seg="incoming"]) { color: var(--s-agent); }
+.glog-subject-full { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; color: var(--text); overflow-wrap: anywhere; }
+.glog-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 12.5px; color: var(--text-muted); }
+.glog-avatar {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--glog-indigo-soft);
+  background: var(--c-tint-indigo);
+}
+.glog-author-name { font-weight: 500; color: var(--text); }
+.glog-sep { color: var(--text-faint); }
+.glog-when { color: var(--text-muted); }
+.glog-spacer { flex: 1 1 0; min-width: 0; }
+.glog-sha-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 3px 1px 8px;
+  border-radius: 8px;
+  background: var(--c-panel-2);
+}
+.glog-sha-full { font-family: var(--glog-mono); font-size: 11.5px; color: var(--text); }
+.glog-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.glog-copy:hover { background: var(--c-hairline-strong); color: var(--text); }
+.glog-copy[data-copied="true"] { color: var(--c-ok); }
+.glog-msg {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--r-2);
+  background: var(--c-panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.glog-files-head { display: flex; align-items: center; gap: 8px; padding-top: 4px; font-size: 12px; color: var(--text); }
+.glog-files-title { font-weight: 600; }
+/* A plain mono number (mockup `.queue .n`: mono 11px ink-3), no capsule; the padding keeps the old box. */
+.glog-files-count { padding: 0 7px; border: 0; box-shadow: none; background: none; color: var(--ink-3, var(--text-muted)); font-family: var(--glog-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.glog-files-add, .glog-files-del { flex: none; font-family: var(--glog-mono); font-size: 11.5px; font-weight: 600; }
+.glog-files-add, .glog-file-stat .add { color: var(--c-ok); }
+.glog-files-del, .glog-file-stat .del { color: var(--s-del); }
+.glog-files { display: flex; flex-direction: column; gap: 8px; }
+.glog-dir { display: flex; flex-direction: column; gap: 2px; }
+.glog-dir-head { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 8px; font-size: 12px; color: var(--text-muted); }
+.glog-dir-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--glog-mono); }
+.glog-dir-count { flex: none; padding: 0 6px; font-family: var(--glog-mono); font-size: 11px; color: var(--text-faint); background: none; }
+.glog-file {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 28px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.glog-file:hover { background: var(--c-panel-2); }
+.glog-file:is([aria-current="true"], .selected) { background: var(--glog-sel-fill); box-shadow: inset 0 0 0 1px var(--glog-sel-ring); }
+.glog-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--glog-mono); font-size: 12px; }
+.glog-file-stat { flex: none; display: inline-flex; align-items: center; gap: 6px; font-family: var(--glog-mono); font-size: 11px; color: var(--text-muted); }
+.glog-file .dv-pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+/* The status letter is a coloured word, no tile (D18). */
+.glog-file .dv-pill:is([data-s="M"], [data-st="M"]) { color: var(--c-waiting); }
+.glog-file .dv-pill:is([data-s="A"], [data-st="A"]) { color: var(--c-ok); }
+.glog-file .dv-pill:is([data-s="D"], [data-st="D"]) { color: var(--s-del); }
+.glog-file .dv-pill:is([data-s="T"], [data-st="T"], [data-s="R"], [data-st="R"]) { color: var(--glog-indigo-soft); }
+
+/* The uncommitted list keeps its rows but loses the standalone column look. */
+#glog-detail #gp-files { width: auto; min-width: 0; padding: 0; border-right: 0; overflow: visible; }
+
+@media (prefers-reduced-motion: reduce) {
+  .glog-diff { animation: none; }
+  .glog-ref-fold .glog-ref-ico { transition: none; }
+}

@@ -1,0 +1,1420 @@
+/* Merge requests (deck-mr-review R4, redesigned by deck-mr-ui): the git panel's « Merge requests » entry and the open-MR
+   sub-view (#gp-mr). The sub-view takes the place of the status list + diff inside #gp-body.
+   Layout: list (search / chips / rows) -> MR view = header + three columns (tree | diff | review rail) sized by container
+   queries on #gp-mr-view (>= 1100 three columns, >= 760 rail behind a toggle, below 760 stacked).
+   Motion: opacity / transform keyframes only, durations and easings from tokens.css, all off under reduced motion. */
+
+#gp-mr, #gp-mr-view { --mr-danger: #f85149; --mr-tint: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* Icons (lucide paths) as mask images: the markup holds no <svg> and no glyph, the colour follows `currentColor`.
+   Used by the head toggle, the diff bar arrows, the tree head / folders / marks and the list comment count. */
+#gp-mr, #gp-mr-view {
+  --mr-ico-panel: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Cpath d='M15 3v18'/%3E%3C/svg%3E");
+  --mr-ico-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m18 15-6-6-6 6'/%3E%3C/svg%3E");
+  --mr-ico-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --mr-ico-fold: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 20 5-5 5 5'/%3E%3Cpath d='m7 4 5 5 5-5'/%3E%3C/svg%3E");
+  --mr-ico-unfold: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 15 5 5 5-5'/%3E%3Cpath d='m7 9 5-5 5 5'/%3E%3C/svg%3E");
+  --mr-ico-folder: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'/%3E%3C/svg%3E");
+  --mr-ico-thread: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");
+  --mr-ico-draft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/%3E%3C/svg%3E");
+  --mr-bg-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236B7586' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E");
+}
+.mr-rail-toggle::before, .mr-diff-prev::before, .mr-diff-next::before, .mr-tree-foldall::before,
+.mr-file-threads::before, .mr-file-drafts::before, .mr-comments::before {
+  content: "";
+  flex: none;
+  background: currentColor;
+  mask: var(--ico) center / contain no-repeat;
+  -webkit-mask: var(--ico) center / contain no-repeat;
+}
+
+/* Shared button base (zero specificity: every variant below wins). */
+:where(.mr-dialog-actions button, .mr-approve-btn, .mr-send-btn, .mr-rail-toggle, .mr-prev, .mr-next,
+  .mr-box-send, .mr-box-cancel, .mr-draft-actions button, .mr-fail button, .mr-empty button, .mr-author-btn) {
+  padding: 3px 12px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color var(--t), background var(--t), border-color var(--t);
+}
+:where(.mr-dialog-actions button, .mr-approve-btn, .mr-send-btn, .mr-rail-toggle, .mr-prev, .mr-next,
+  .mr-box-send, .mr-box-cancel, .mr-draft-actions button, .mr-fail button, .mr-empty button, .mr-author-btn):hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+:where(.mr-dialog-actions button, .mr-approve-btn, .mr-send-btn, .mr-rail-toggle, .mr-prev, .mr-next,
+  .mr-box-send, .mr-box-cancel, .mr-draft-actions button, .mr-fail button, .mr-empty button, .mr-author-btn):disabled { opacity: 0.5; cursor: default; }
+:where(.mr-dialog-actions button, .mr-approve-btn, .mr-send-btn, .mr-rail-toggle, .mr-prev, .mr-next,
+  .mr-box-send, .mr-box-cancel, .mr-draft-actions button, .mr-fail button, .mr-empty button, .mr-author-btn):focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+.mr-dialog-actions button[hidden] { display: none; }
+/* Primary: filled accent (review submit, line box send, dialog confirm). Secondary accent: approve. */
+.mr-send-btn, .mr-box-send, .mr-dialog-confirm {
+  color: var(--c-on-accent, #06201C);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.mr-send-btn:hover:not(:disabled), .mr-box-send:hover:not(:disabled), .mr-dialog-confirm:hover:not(:disabled) {
+  color: var(--c-on-accent, #06201C);
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+/* An action reads through the colour of its text or its fill, never a coloured border (F1). */
+.mr-approve-btn { color: var(--s-ok); border-color: transparent; }
+/* The diff library's state tag is hidden (style.css) but keeps a coloured border in the cascade: none (F1). */
+#gp-mr-view .d2h-tag { border: 0; background: transparent; }
+.mr-approve-btn:hover:not(:disabled) { color: var(--c-ok, #86EFAC); background: color-mix(in srgb, var(--c-ok, #86EFAC) 12%, transparent); }
+
+#gp-mr-btn {
+  background: none;
+  border: 1px solid var(--border-strong, var(--border));
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  padding: 2px 9px;
+  transition: color var(--t), background var(--t);
+}
+#gp-mr-btn[hidden] { display: none; }
+#gp-mr-btn:hover { color: var(--text); background: var(--surface-2); }
+#gp-mr-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+#gp-mr {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+#gp-mr[hidden] { display: none; }
+.mr-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+#gp-mr-back {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius);
+  padding: 3px 7px;
+}
+#gp-mr-back:hover { background: var(--surface-2); }
+.mr-heading { color: var(--text-muted); font-weight: 600; }
+.mr-note {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  color: var(--c-waiting, #FBBF77);
+  background: color-mix(in srgb, var(--c-waiting, #FBBF77) 10%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.mr-note[hidden] { display: none; }
+
+/* Background refresh bar (U10): a 40 % strip sliding over a 2 px track, transform only. */
+.mr-progress { position: relative; flex-shrink: 0; height: 2px; overflow: hidden; }
+.mr-progress[hidden] { display: none; }
+/* A block strip takes no layout space: the content below keeps its place and the strip lies on its top edge. */
+.mr-progress:not(.ld-inline) { margin-bottom: -2px; z-index: 1; }
+/* #sidebar is a flex column with gap: 8px, which a strip child would add once more. */
+#sidebar > .mr-progress:not(.ld-inline) { margin-bottom: calc(-2px - 8px); }
+.mr-progress::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  background: var(--accent);
+  animation: mr-progress calc(var(--dur-drawer) * 4) var(--ease-out) infinite;
+}
+/* Inline wait bar (after a wait text, in a button): the same strip on a short faint track. */
+.mr-progress.ld-inline {
+  display: inline-block;
+  width: 48px;
+  margin-inline-start: 8px;
+  vertical-align: middle;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--text-faint) 25%, transparent);
+}
+
+/* ---- List: search / chips / author menu, then rows ---- */
+.mr-list-bar {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+input.mr-search, input.mr-tree-filter {
+  flex: 1 1 160px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background-color: var(--surface);
+  background-image: var(--mr-bg-search);
+  background-repeat: no-repeat;
+  background-position: 10px center;
+  background-size: 14px;
+  padding-left: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color var(--t), background-color var(--t);
+}
+input.mr-search { height: 36px; max-width: 420px; border-radius: 11px; }
+input.mr-tree-filter { height: 32px; border-radius: 9px; }
+input.mr-search::placeholder, input.mr-tree-filter::placeholder { color: var(--text-faint); }
+input.mr-search:focus, input.mr-tree-filter:focus { border-color: var(--accent); background-color: var(--surface-2); }
+.mr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color var(--t), background var(--t), border-color var(--t);
+}
+.mr-chip:hover { color: var(--text); background: var(--surface-2); }
+.mr-chip.on { color: var(--accent); background: var(--mr-tint); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.mr-chip:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.mr-chip-count {
+  padding: 0 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border-radius: 999px;
+}
+.mr-chip.on .mr-chip-count { color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.mr-author-btn { border-radius: 999px; }
+.mr-author-menu {
+  position: absolute;
+  top: calc(100% - 2px);
+  right: 10px;
+  z-index: 10;
+  min-width: 190px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-menu, var(--shadow-2));
+  transform-origin: top right;
+  animation: mr-pop var(--dur-pop) var(--ease-pop) backwards;
+}
+.mr-author-menu[hidden] { display: none; }
+.mr-author-item {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 9px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+  outline: none;
+}
+.mr-author-item:hover, .mr-author-item:focus-visible { color: var(--text); background: var(--mr-tint); }
+.mr-author-item.on { color: var(--accent); }
+.mr-author-item .mr-avatar { width: 20px; height: 20px; font-size: 9px; }
+.mr-author-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-count { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+#gp-mr-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; outline: none; }
+#gp-mr-list[aria-busy="true"] { cursor: progress; }
+.mr-list-heading { padding: 12px 12px 6px; font-size: 20px; font-weight: 600; letter-spacing: -0.015em; color: var(--text); }
+/* A row (board « Liste »): avatar | !iid + title (+ Brouillon badge) over author / branch pill / updated | comment count. */
+.mr-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background var(--t), box-shadow var(--t);
+}
+.mr-row:hover { background: rgba(255, 255, 255, 0.045); }
+.mr-row.active { background: var(--mr-tint); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent); }
+.mr-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.mr-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mr-meta { gap: 7px; }
+.mr-side { flex: none; display: flex; align-items: center; }
+.mr-row > .mr-avatar { width: 24px; height: 24px; font-size: 9.5px; }
+.mr-title { color: var(--text); font-size: 13.5px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-draft-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--s-wait);
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+}
+.mr-meta, .mr-updated, .mr-comments { font-size: 12px; color: var(--text-faint); white-space: nowrap; }
+.mr-updated { flex-shrink: 0; color: var(--text-muted); }
+.mr-comments { display: inline-flex; align-items: center; gap: 5px; min-width: 38px; justify-content: flex-end; font-variant-numeric: tabular-nums; }
+.mr-comments { --ico: var(--mr-ico-thread); }
+.mr-comments::before { width: 14px; height: 14px; }
+/* !iid: muted mono, first on the title line. */
+.mr-iid { color: var(--text-faint); font: 500 12px var(--font-mono, "JetBrains Mono", monospace); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.mr-author { flex-shrink: 0; font-size: 12px; color: var(--text-muted); }
+.mr-branches { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-faint); }
+.mr-branch-pill { font-family: var(--font-mono, "JetBrains Mono", monospace); color: var(--text-muted); padding: 1px 7px; border-radius: 6px; background: rgba(255, 255, 255, 0.04); }
+/* Separators between author, branch pill and update time (outside the pill). */
+.mr-meta > .mr-author::after, .mr-meta > .mr-updated::before { content: "\00B7"; color: var(--text-faint); opacity: 0.7; }
+.mr-meta > .mr-author::after { margin-left: 7px; }
+.mr-meta > .mr-updated::before { margin-right: 7px; }
+.mr-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  box-sizing: border-box;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  border: 0;
+  border-radius: 50%;
+  user-select: none;
+}
+.mr-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+.mr-empty small { font-size: 10.5px; max-width: 80%; text-align: center; }
+.mr-fail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--c-waiting, #FBBF77);
+  background: color-mix(in srgb, var(--c-waiting, #FBBF77) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--c-waiting, #FBBF77) 35%, transparent);
+  border-radius: var(--radius);
+}
+.mr-fail > :first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+/* ---- MR view: header, then the three columns ---- */
+#gp-mr.mr-in-view #gp-mr-list,
+#gp-mr.mr-in-view #gp-mr-note { display: none; }
+#gp-mr-view {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  container: mrv / inline-size;
+}
+#gp-mr-view[hidden] { display: none; }
+.mr-view-fill { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+/* The single MR header bar (board D `.mrh`, 72 px). The DOM is flat, so `order` builds two lines: back, !iid, title, approve and
+   the rail toggle on the first, avatar / author / branches / update time / files / +- on the second; the ::after is the break. */
+.mr-view-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
+  column-gap: 10px;
+  row-gap: 0;
+  box-sizing: border-box;
+  height: 72px;
+  flex-shrink: 0;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.mr-view-head::after { content: ""; order: 5; flex: 0 0 100%; height: 6px; }
+.mr-view-back { order: 0; }
+.mr-view-head-iid { order: 1; margin-right: -4px; }
+.mr-view-head-title { order: 2; }
+.mr-view-head .mr-approve-btn { order: 3; }
+.mr-view-head .mr-rail-toggle { order: 4; }
+.mr-view-head .mr-avatar { order: 6; width: 22px; height: 22px; font-size: 9.5px; }
+.mr-view-head-author { order: 7; color: var(--text); white-space: nowrap; }
+.mr-view-head-branches { order: 8; }
+.mr-view-head-updated { order: 9; }
+.mr-view-head-files { order: 10; }
+.mr-view-head-stat { order: 11; }
+.mr-view-head .mr-steps { order: 12; }
+/* Back, approve and the rail toggle share one 30-32 px control height. */
+.mr-view-back {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 10px 0 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color var(--t), background var(--t);
+}
+.mr-view-back:hover { color: var(--text); background: var(--surface-2); }
+.mr-view-back:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.mr-view-head .mr-approve-btn, .mr-view-head .mr-rail-toggle {
+  height: 32px;
+  padding: 0 13px;
+  font-size: 12.5px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.mr-view-head-iid { color: var(--text-faint); font-size: 16px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.mr-view-head-title {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.mr-view-head-branches {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.mr-view-head-updated, .mr-view-head-files { color: var(--text-faint); white-space: nowrap; }
+.mr-view-head-files::before { content: "\00B7"; margin-right: 10px; }
+/* Keep the second line on one line: the least useful facts go first as the view narrows. */
+@container mrv (max-width: 899px) {
+  .mr-view-head-updated, .mr-view-head-files { display: none; }
+}
+@container mrv (max-width: 599px) {
+  .mr-view-head-branches { display: none; }
+}
+.mr-view-head-stat { font-family: var(--font-mono, "JetBrains Mono", monospace); font-size: 11.5px; white-space: nowrap; }
+.mr-view-head-stat .add { color: var(--c-ok, #86EFAC); }
+.mr-view-head-stat .del { color: var(--mr-danger); }
+/* Loading steps: one dot per part (version / files / discussions); `.done` filled, `.fail` danger. */
+.mr-steps { display: inline-flex; flex: 1 0 auto; flex-wrap: wrap; align-items: center; gap: 4px 6px; max-width: 100%; }
+.mr-steps[hidden] { display: none; }
+.mr-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  transition: color var(--t), border-color var(--t);
+}
+.mr-step::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  box-sizing: border-box;
+  transition: background var(--t);
+}
+/* Pending step: a turning ring, rotate only; the transparent top arc keeps left = right. */
+.mr-step:not(.done):not(.fail)::before {
+  border-top-color: transparent;
+  animation: mr-spin calc(var(--dur-drawer) * 4) linear infinite;
+}
+@keyframes mr-spin { to { transform: rotate(360deg); } }
+.mr-step.done { color: var(--c-ok, #86EFAC); border-color: color-mix(in srgb, var(--c-ok, #86EFAC) 35%, transparent); }
+.mr-step.done::before { background: currentColor; }
+.mr-step.fail { color: var(--mr-danger); border-color: color-mix(in srgb, var(--mr-danger) 40%, transparent); }
+.mr-step.fail::before { background: currentColor; }
+/* The open state snaps: setRailOpen flips aria-expanded at every view reset, and motion stays opacity / transform only. */
+.mr-rail-toggle { display: inline-flex; align-items: center; transition: none; }
+/* Icon only (board D panel icon): the button holds no text, `aria-label` / `title` name it. */
+.mr-view-head .mr-rail-toggle { --ico: var(--mr-ico-panel); justify-content: center; width: 32px; padding: 0; }
+.mr-rail-toggle::before { width: 16px; height: 16px; }
+.mr-rail-toggle[aria-expanded="true"] { color: var(--accent); background: var(--mr-tint); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* Columns. The rail is never absent: folded (.mr-cols without .rail-open) it is a 52 px column holding only the strip, in every band.
+   Base (< 760 px): tree above diff, the folded rail a 52 px column spanning both rows; opened, an overlay over the right edge. */
+.mr-cols {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px;
+  grid-template-rows: minmax(0, 30%) minmax(0, 1fr);
+}
+.mr-col-tree, .mr-col-diff, .mr-col-rail { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.mr-col-tree { border-bottom: 1px solid var(--border); background: var(--surface); }
+.mr-col-diff { background: var(--bg); }
+.mr-col-rail { grid-column: 2; grid-row: 1 / span 2; background: var(--surface); border-left: 1px solid var(--border); }
+.mr-cols:not(.rail-open) .mr-rail > :not(.mr-rail-strip), .mr-cols.rail-open .mr-rail-strip { display: none; }
+.mr-cols.rail-open .mr-col-rail {
+  grid-area: auto;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  width: min(340px, 100%);
+  border-left-color: var(--border-strong, var(--border));
+  box-shadow: var(--shadow-3);
+  animation: mr-enter var(--dur-drawer) var(--ease-out) backwards;
+}
+@container mrv (min-width: 760px) {
+  .mr-cols { grid-template-columns: minmax(190px, 250px) minmax(0, 1fr) 52px; grid-template-rows: minmax(0, 1fr); }
+  .mr-col-tree { border-bottom: none; border-right: 1px solid var(--border); }
+  .mr-col-rail { grid-column: 3; grid-row: 1; }
+}
+@container mrv (min-width: 1100px) {
+  .mr-cols { grid-template-columns: minmax(200px, 280px) minmax(0, 1fr) 52px; }
+  .mr-cols.rail-open { grid-template-columns: minmax(200px, 280px) minmax(0, 1fr) minmax(280px, 340px); }
+  .mr-cols.rail-open .mr-col-rail { grid-column: 3; grid-row: 1; position: static; width: auto; box-shadow: none; animation: none; border-left-color: var(--border); }
+}
+
+/* ---- Folded rail strip (board D `.strip`): unfold chevron, thread and draft counts, send at the bottom. The icons are CSS masks
+   on ::before: the rail root may hold no <svg>. mr-rail.js sets the strip's end state inline; these rules are the static state. ---- */
+.mr-rail-strip {
+  --ico-unfold: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m15 18-6-6 6-6'/%3E%3C/svg%3E");
+  --ico-thread: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3C/svg%3E");
+  --ico-draft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/%3E%3C/svg%3E");
+  --ico-send: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m22 2-7 20-4-9-9-4Z'/%3E%3Cpath d='M22 2 11 13'/%3E%3C/svg%3E");
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+}
+.mr-rail-strip[hidden] { display: none; }
+.mr-strip-btn, .mr-strip-stat {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 1.1;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.mr-strip-btn { cursor: pointer; transition: color var(--t), background var(--t); }
+.mr-strip-btn:hover:not(:disabled) { color: var(--text); background: color-mix(in srgb, var(--text) 7%, transparent); }
+.mr-strip-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.mr-strip-btn::before, .mr-strip-stat::before {
+  content: "";
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  mask: var(--ico) center / contain no-repeat;
+  -webkit-mask: var(--ico) center / contain no-repeat;
+}
+.mr-strip-unfold { --ico: var(--ico-unfold); font-size: 0; }
+.mr-strip-threads { --ico: var(--ico-thread); }
+.mr-strip-drafts { --ico: var(--ico-draft); color: var(--c-waiting, #FBBF77); }
+.mr-strip-send { --ico: var(--ico-send); margin-top: auto; color: var(--c-on-accent, #06201C); background: var(--accent); }
+.mr-strip-send:hover:not(:disabled) { color: var(--c-on-accent, #06201C); background: var(--accent-hover); }
+.mr-strip-send:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- Tree ---- */
+/* No horizontal padding: rows span the whole column, the filter and folder labels carry their own gutter. */
+.mr-tree {
+  --mr-name-add: #B5F5C8;
+  --mr-name-del: #F2A3A3;
+  --mr-name-seen: #7A8494;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.mr-tree > * { flex-shrink: 0; }
+input.mr-tree-filter { display: block; flex: none; width: calc(100% - 20px); margin: 0 10px 8px; }
+/* Head (board D `.th`): « Fichiers », the plain count, then the two fold-all icon buttons flush right. */
+.mr-tree-head { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 14px; }
+.mr-tree-head[hidden] { display: none; }
+.mr-tree-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+/* A plain mono number (mockup `.queue .n`: mono 11px ink-3), no capsule; the padding keeps the old box. */
+.mr-tree-count {
+  padding: 1px 7px;
+  border: 0;
+  box-shadow: none;
+  background: none;
+  color: var(--ink-3, var(--text-muted));
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.mr-tree-head .mr-tree-foldall:first-of-type { --ico: var(--mr-ico-fold); margin-left: auto; }
+.mr-tree-head .mr-tree-foldall:last-of-type { --ico: var(--mr-ico-unfold); }
+.mr-tree-foldall::before { width: 15px; height: 15px; }
+/* Folder rows: chevron, folder icon, name, count pill (the shared `.dv-dir` button of style.css). The rows below sit under the
+   same 6 px gutter, a file indented to the folder name. */
+.mr-dir { padding: 0 6px; }
+.mr-tree-ico { flex: none; width: 15px; height: 15px; color: #7FB6E6; background: currentColor; mask: var(--mr-ico-folder) center / contain no-repeat; -webkit-mask: var(--mr-ico-folder) center / contain no-repeat; }
+.mr-dir-name {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mr-file {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: baseline;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  outline: none;
+  transition: color var(--t), background var(--t), box-shadow var(--t);
+}
+.mr-file:hover { background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--text); }
+.mr-file:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mr-file.sel {
+  color: var(--text);
+  background: var(--mr-tint);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.mr-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Row (board D `.f`): status pill | name | thread, draft, seen marks | 5-block diffstat. Every cell has its own column, so a
+   missing mark leaves a zero-width track and the others keep their place; the gaps are margins on the cells. */
+.mr-tree .mr-file {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px 0 30px;
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+.mr-tree .mr-file.sel { color: var(--text); background: var(--mr-tint); } /* the grid rule above resets the tint of `.mr-file.sel` */
+.mr-tree .mr-file-status { grid-column: 1; margin-right: 8px; }
+.mr-tree .mr-file-name { grid-column: 2; }
+.mr-tree .mr-tree-threads { grid-column: 3; margin-left: 8px; }
+.mr-tree .mr-tree-drafts { grid-column: 4; margin-left: 8px; }
+.mr-tree .mr-tree-seen { grid-column: 5; margin-left: 8px; }
+.mr-tree .mr-file-stat { grid-column: 6; margin-left: 8px; }
+.mr-file-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 4px;
+}
+/* The tree pills carry `.dv-pill` (palette in style.css); the status colours below only serve a pill without it. */
+.mr-file-status:not(.dv-pill) { color: var(--text-faint); background: var(--surface-2); }
+.mr-file-status:not(.dv-pill)[data-s="M"] { color: var(--c-waiting, #FBBF77); background: color-mix(in srgb, var(--c-waiting, #FBBF77) 14%, transparent); }
+.mr-file-status:not(.dv-pill)[data-s="A"] { color: var(--c-ok, #86EFAC); background: color-mix(in srgb, var(--c-ok, #86EFAC) 14%, transparent); }
+.mr-file-status:not(.dv-pill)[data-s="D"] { color: var(--mr-danger); background: color-mix(in srgb, var(--mr-danger) 14%, transparent); }
+.mr-file-status:not(.dv-pill)[data-s="R"] { color: var(--c-agent, #A78BFA); background: color-mix(in srgb, var(--c-agent, #A78BFA) 14%, transparent); }
+.mr-file-stat { display: inline-flex; align-items: center; font-family: var(--font-mono, "JetBrains Mono", monospace); font-size: 10.5px; color: var(--text-faint); white-space: nowrap; }
+/* Marks (board D `.bd`): an icon and a number, no pill; threads accent, drafts amber, seen a check in the accent colour. */
+.mr-file-threads, .mr-file-drafts, .mr-tree-seen {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.mr-file-threads { --ico: var(--mr-ico-thread); }
+.mr-file-drafts { --ico: var(--mr-ico-draft); color: #F2B66D; }
+.mr-file-threads::before, .mr-file-drafts::before { width: 12px; height: 12px; }
+.mr-tree-seen { font-size: 12px; }
+
+/* Names by status, read from the status chip already in the row. :where() keeps the specificity low so .seen wins. */
+.mr-file:where(:has(.mr-file-status[data-s="A"])) .mr-file-name { color: var(--mr-name-add, #B5F5C8); }
+.mr-file:where(:has(.mr-file-status[data-s="D"])) .mr-file-name {
+  color: var(--mr-name-del, #F2A3A3);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--mr-name-del, #F2A3A3) 50%, transparent);
+}
+.mr-file.seen .mr-file-name { color: var(--mr-name-seen, #7A8494); }
+
+/* Review progress (board D .prog / .bar) and the fold-all buttons; the markup is mr-tree.js. */
+.mr-tree-progress {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: auto;
+  padding: 10px 14px 14px;
+  border-top: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+  background: var(--surface);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+/* Key hint under the progress bar: two `kbd` caps and the sentence. */
+.mr-tree-hint { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-faint); }
+.mr-tree-hint kbd {
+  padding: 0 5px;
+  font: 10.5px var(--font-mono, "JetBrains Mono", monospace);
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+}
+.mr-tree-hint-text { margin-left: 3px; font-size: 11px; }
+.mr-tree-progress-bar { height: 4px; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--text) 6%, transparent); }
+.mr-tree-progress-bar > i { display: block; height: 100%; border-radius: 4px; background: var(--accent); transition: width var(--dur-height) var(--ease-out); }
+.mr-tree-foldall {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color var(--dur-color), background var(--dur-color), border-color var(--dur-color);
+}
+.mr-tree-foldall:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
+.mr-tree-foldall:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mr-tree-foldall svg { width: 14px; height: 14px; }
+.mr-tree-progress[hidden], .mr-tree-foldall[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .mr-tree-progress-bar > i, .mr-tree-foldall { transition-duration: 0s; }
+}
+
+/* ---- Diff column ---- */
+/* Board D `.fb`: 48 px, the switches on the left, the file counter and the two arrows flush right (mr-diff.js puts the auto margin
+   on the previous arrow). The path label is visually hidden, the sticky file header shows the path. */
+.mr-diff-bar {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  height: 48px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.mr-diff-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, "JetBrains Mono", monospace);
+  font-size: 11.5px;
+  color: var(--text);
+}
+.mr-prev, .mr-next { padding: 2px 9px; }
+.mr-diff-bar .mr-diff-prev, .mr-diff-bar .mr-diff-next {
+  --ico: var(--mr-ico-up);
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 0; /* the arrow glyph stays in the DOM for tests and screen readers; the mask icon replaces it */
+  border: 0;
+  border-radius: 8px;
+}
+.mr-diff-bar .mr-diff-next { --ico: var(--mr-ico-down); }
+.mr-diff-prev::before, .mr-diff-next::before { width: 16px; height: 16px; }
+.mr-diff-pos { min-width: 44px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-muted); white-space: nowrap; }
+.mr-format { display: inline-flex; border: 1px solid var(--border-strong, var(--border)); border-radius: var(--radius); overflow: hidden; }
+.mr-format button {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+.mr-format button + button { border-left: 1px solid var(--border-strong, var(--border)); }
+.mr-format button:hover { color: var(--text); background: var(--surface-2); }
+.mr-format button.on, .mr-format button[aria-pressed="true"] { color: var(--accent); background: var(--mr-tint); }
+.mr-format button:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mr-diff { flex: 1; min-height: 0; overflow: auto; }
+.mr-diff-note { padding: 18px; text-align: center; color: var(--text-faint); font-size: 12.5px; }
+/* Selected lines: a tint layered over whatever the row paints (add / del), a hairline on the top and bottom edges of the range.
+   The `#gp-mr` prefix lifts these above the dark cell rules of style.css, whose `:is(#gp-diff, .mr-diff)` weighs
+   (1,1,0) and whose `background` shorthand would reset the gradient layer. */
+#gp-mr .mr-diff tr.mr-sel > td { background-image: linear-gradient(var(--mr-tint), var(--mr-tint)); }
+#gp-mr .mr-diff tr.mr-sel-first > td { box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+#gp-mr .mr-diff tr.mr-sel-last > td { box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+#gp-mr .mr-diff tr.mr-sel-first.mr-sel-last > td {
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent) 35%, transparent), inset 0 -1px 0 color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* Spacer: the empty twin of an inserted row on the other side of a split view; same height, hatched, no content. The split view's
+   wide block (`.mr-wide`) is laid over a `tr.mr-wide-spacer` in each half: those stay plain, the block hides them anyway and
+   a hatch showing through a fold animation would read as a second row. */
+.mr-diff tr.mr-spacer:not(.mr-wide-spacer) > td {
+  background-image: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--text) 4%, transparent) 6px 12px) !important;
+  box-shadow: none !important;
+}
+.mr-diff tr.mr-spacer > td > * { visibility: hidden; }
+.mr-diff tr.mr-wide-spacer > td { background-color: var(--dv-row, var(--bg)); background-image: none !important; box-shadow: none !important; }
+
+/* Wide block (K8, board D split): one layer across both halves, appended to `.d2h-files-diff` by mr-diff.js, which sets left / right /
+   top inline. It paints above the code rows but below the sticky file header (`.dv-fh`, z-index 4). It is a size container so
+   the Claude bubble (`.ca-slot`, 100cqw) measures the layer, not the whole MR view. The cards inside take the inset below. */
+.mr-wide { z-index: 1; container-type: inline-size; background: var(--dv-row, var(--bg)); --mr-card-inset: 110px; }
+.mr-diff .mr-wide tr[class] > td { background: transparent; }
+.mr-wide .mr-draft, .mr-wide .mr-box { max-width: 780px; margin: 8px 18px 12px var(--mr-card-inset); }
+.mr-wide .ca-slot { padding-left: var(--mr-card-inset); padding-right: 18px; }
+.mr-thread-row > td { padding: 0 !important; background: var(--bg); white-space: normal; }
+.mr-diff tr.mr-box-row > td { padding: 0 !important; border: 0; background: var(--bg); white-space: normal; }
+
+/* ---- Line box (ask / comment) and the review dock box ---- */
+.mr-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 8px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-card, var(--radius));
+  box-shadow: var(--shadow-1);
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  text-align: left;
+  white-space: normal;
+  animation: mr-enter var(--dur-pop) var(--ease-out) backwards;
+}
+.mr-dock .mr-box { margin: 0; box-shadow: none; animation: none; }
+.mr-box-modes { display: inline-flex; align-self: flex-start; border: 1px solid var(--border-strong, var(--border)); border-radius: 999px; overflow: hidden; }
+.mr-box-mode {
+  padding: 2px 11px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color var(--t), background var(--t);
+}
+.mr-box-mode:hover { color: var(--text); }
+.mr-box-mode.on, .mr-box-mode[aria-pressed="true"] { color: var(--accent); background: var(--mr-tint); }
+.mr-box-mode:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+textarea.mr-box-input, textarea.mr-draft-edit {
+  width: 100%;
+  min-height: 56px;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color var(--t);
+}
+textarea.mr-box-input:focus, textarea.mr-draft-edit:focus { border-color: var(--accent); }
+.mr-box-notice { font-size: 11.5px; color: var(--c-waiting, #FBBF77); overflow-wrap: anywhere; }
+.mr-box-notice:empty { display: none; }
+.mr-box-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* ---- Review rail: collapsible sections, then the dock ---- */
+.mr-rail { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+/* Head (board D `.rh`): « Discussion » and the counts pill, 48 px, pinned while the sections scroll under it. */
+.mr-rail-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 8px;
+  height: 48px;
+  padding: 0 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.mr-rail-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.mr-rail-counts {
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border-radius: 999px;
+}
+.mr-rail-counts:empty { display: none; }
+/* Freshness marker (A6): a dot and « à jour · il y a N s » at the right of the head; the dot is the OK token. */
+.mr-rail-fresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.mr-rail-fresh[hidden] { display: none; }
+.mr-rail-fresh-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--c-ok, #86EFAC); }
+.mr-rail-fresh-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* « Nouveau » chip (A7) on a rail item: the row gets a fourth column for it only while it carries one. */
+.mr-rail .mr-note-new {
+  flex: none;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 999px;
+}
+.mr-rail-thread .mr-note-new { grid-area: new; justify-self: end; }
+.mr-rail-thread:has(> .mr-note-new) {
+  grid-template-columns: 24px minmax(0, 1fr) auto auto;
+  grid-template-areas: "av pos new res" "av text text text";
+}
+.mr-rail-sec { border-bottom: 1px solid color-mix(in srgb, var(--text) 6%, transparent); }
+/* Section label (board D `.rt`): sentence case, no spaced capitals (F1). The fold chevron shows on hover / focus, at the right edge. */
+.mr-rail-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 16px 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color var(--t);
+}
+.mr-rail-sec-head::before {
+  content: "\203A";
+  order: 2;
+  margin-left: auto;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  transition: transform var(--dur-height) var(--ease-out), opacity var(--dur-height) var(--ease-out);
+}
+.mr-rail-sec-head[aria-expanded="true"]::before { transform: rotate(90deg); }
+.mr-rail-sec-head:hover, .mr-rail-sec-head:focus-visible { color: var(--text-muted); }
+.mr-rail-sec-head:hover::before, .mr-rail-sec-head:focus-visible::before { opacity: 1; }
+.mr-rail-sec-head:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mr-rail-sec-body { padding: 0 16px 14px; overflow: hidden; }
+.mr-rail-sec-body[hidden] { display: none; }
+.mr-rail-empty { padding: 4px 0; font-size: 11.5px; color: var(--text-muted); }
+/* Description: the MR text, clamped to a scrolling box so a long one never pushes the threads away. */
+.mr-rail-sec[data-sec="desc"] .mr-rail-sec-body { max-height: 208px; overflow-y: auto; font-size: 13px; line-height: 1.6; color: #C9D1DC; overflow-wrap: anywhere; }
+.mr-rail-sec[data-sec="desc"] .mr-rail-sec-body p { margin: 0; }
+.mr-rail-sec[data-sec="desc"] .mr-rail-sec-body p + p { margin-top: 8px; }
+/* One compact row per thread (board D `.it`): avatar | file:line over the first line of the first note, one line each. */
+.mr-rail-thread {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-areas: "av pos res" "av text text";
+  column-gap: 10px;
+  row-gap: 2px;
+  align-items: center;
+  box-sizing: border-box;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 8px;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  white-space: normal;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background var(--t);
+}
+.mr-rail-thread:hover { background: rgba(255, 255, 255, 0.05); }
+.mr-rail-thread:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.mr-rail-thread .mr-avatar { grid-area: av; align-self: start; width: 24px; height: 24px; font-size: 9px; }
+.mr-rail-thread-pos { grid-area: pos; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--font-mono, "JetBrains Mono", monospace); color: var(--text-faint); }
+.mr-rail-thread-text { grid-area: text; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 1.45; color: #C9D1DC; }
+.mr-rail-thread .mr-note-resolved { grid-area: res; font-size: 10px; font-weight: 600; }
+.mr-rail-thread-notes { margin: 0 0 6px 34px; }
+/* Thread item (A5): the row, the notes of a general thread, « N messages · last author, age », the reply / ask pills and the slot
+   where a thread box or an answer bubble lands. */
+.mr-rail-thread-item { display: block; }
+.mr-rail-thread-meta { margin: 0 0 4px 34px; font-size: 11px; color: var(--text-faint); }
+.mr-rail-thread-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px 34px; }
+.mr-rail-thread-actions button {
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t);
+}
+.mr-rail-thread-actions button:hover { background: rgba(255, 255, 255, 0.05); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.mr-rail-thread-actions button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.mr-rail-thread-slot { margin: 0 0 6px 34px; }
+.mr-rail-thread-slot:empty { display: none; }
+/* The reply icon of a reply draft in « Ma revue » takes the place of the line badge. */
+.mr-rail-draft .mr-draft-ico {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: start;
+  min-width: 26px;
+  box-sizing: border-box;
+  padding: 2px 5px;
+  text-align: center;
+  font: 600 11px var(--font-mono, "JetBrains Mono", monospace);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 5px;
+}
+.mr-thread {
+  margin: 6px 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: system-ui, sans-serif;
+  white-space: normal;
+  text-align: left;
+}
+/* A thread card with a position is a button to its line (tabindex set by mr-rail.js). */
+.mr-rail-thread[tabindex] { cursor: pointer; transition: background var(--t), border-color var(--t); }
+.mr-rail-thread[tabindex]:hover {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.mr-rail-thread[tabindex]:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.mr-draft {
+  margin: 6px 8px;
+  padding: 6px 10px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+  font-family: system-ui, sans-serif;
+  text-align: left;
+  white-space: normal;
+}
+/* Rail draft row (board D `.it`, « Ma revue »): the line badge, then the file over the draft text on one line. The edit / delete /
+   jump buttons show on hover and focus (they stay in the tab order); the editor keeps its own buttons visible. */
+.mr-rail-draft {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 2px;
+  margin: 0 -8px;
+  padding: 8px;
+  font-family: inherit;
+  text-align: left;
+  white-space: normal;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+}
+.mr-rail-draft:hover { background: rgba(255, 255, 255, 0.05); }
+.mr-rail-draft .mr-draft-head { display: contents; }
+.mr-rail-draft-line {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  align-self: start;
+  min-width: 26px;
+  box-sizing: border-box;
+  padding: 2px 5px;
+  text-align: center;
+  font: 600 10px var(--font-mono, "JetBrains Mono", monospace);
+  color: #F2B66D;
+  background: rgba(242, 182, 109, 0.14);
+  border-radius: 5px;
+}
+.mr-rail-draft .mr-draft-pos { grid-column: 2; grid-row: 1; font: 11px var(--font-mono, "JetBrains Mono", monospace); color: var(--text-faint); }
+.mr-rail-draft .mr-draft-body { grid-column: 2; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 1.45; color: #C9D1DC; }
+.mr-rail-draft .mr-draft-error { grid-column: 2; }
+.mr-rail-draft.general { grid-template-columns: minmax(0, 1fr); }
+.mr-rail-draft.general .mr-draft-pos, .mr-rail-draft.general .mr-draft-body, .mr-rail-draft.general .mr-draft-error { grid-column: 1; }
+.mr-rail-draft > :not(.mr-draft-head):not(.mr-draft-body):not(.mr-draft-actions) { grid-column: 1 / -1; }
+.mr-rail-draft:not(:has(> .mr-draft-edit)) > .mr-draft-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface);
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity var(--dur-color) var(--ease-out);
+}
+.mr-rail-draft:hover > .mr-draft-actions, .mr-rail-draft:focus-within > .mr-draft-actions { opacity: 1; }
+.mr-rail-draft > .mr-draft-edit, .mr-rail-draft > .mr-draft-note, .mr-rail-draft > .mr-draft-actions { grid-column: 1 / -1; }
+.mr-dock {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border-strong, var(--border));
+}
+.mr-dock-title { font-size: 11px; font-weight: 600; color: var(--text-muted); }
+/* Board D `.send`: a 40 px primary button under the box. */
+.mr-dock .mr-send-btn { align-self: stretch; height: 40px; padding: 0 12px; font-size: 13px; border-radius: 10px; box-shadow: 0 8px 24px -10px color-mix(in srgb, var(--accent) 60%, transparent); }
+.mr-dock .mr-send-btn:disabled { box-shadow: none; }
+
+/* ---- Threads, notes (shared by diff rows and the rail) ---- */
+.mr-threads {
+  flex-shrink: 0;
+  max-height: 30%;
+  overflow-y: auto;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.mr-threads-title { font-size: 11px; font-weight: 600; color: var(--text-muted); padding: 2px 0 4px; }
+.mr-threads .mr-thread { margin: 0 0 6px; }
+.mr-thread-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 11px; color: var(--text-faint); min-width: 0; }
+.mr-thread-pos { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--c-waiting, #FBBF77);
+  border: 1px solid color-mix(in srgb, var(--c-waiting, #FBBF77) 50%, transparent);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.mr-note-item + .mr-note-item { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.mr-note-meta { display: flex; align-items: baseline; gap: 8px; font-size: 11px; color: var(--text-faint); }
+.mr-note-author { color: var(--text); font-weight: 600; }
+.mr-note-resolved { color: var(--c-ok, #86EFAC); }
+.mr-note-body { font-size: 12.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
+.mr-note-body p { margin: 4px 0; }
+.mr-note-body pre { overflow-x: auto; padding: 6px 8px; border-radius: var(--radius); background: var(--bg); }
+.mr-note-body code { font-size: 11.5px; }
+
+/* ---- Inline thread cards (board D_Lecture `.card`): inset from the code column, a dashed one-liner when folded ----
+   The summary and the folded layout follow `aria-expanded` of the fold button, so they hold whatever end state the module sets. */
+.mr-diff { --mr-card-inset: 96px; } /* unified gutter: 7em of 11.5px = 81px */
+.mr-diff .d2h-file-side-diff { --mr-card-inset: 62px; } /* side gutter: 4em = 46px */
+/* A1 (D15): the card and the thread box under it span the diff column like the line-draft card (`.mr-draft`, margin 6px 8px); only the
+   wide block of the split view keeps the inset and the 780px cap, as `.mr-wide .mr-draft` does. */
+.mr-wide .mr-thread-card { max-width: 780px; margin: 8px 18px 12px var(--mr-card-inset); }
+.mr-thread-slot:empty { display: none; }
+.mr-thread-slot .mr-box.kept { animation: none; }
+/* R4 (D14): the answer bubble of a thread, in the slot under its card (as wide as the box) or under its rail item. */
+.mr-thread-slot .ca-bubble { margin: 6px 8px; }
+.mr-wide .mr-thread-slot .ca-bubble { max-width: 780px; margin: 8px 18px 12px var(--mr-card-inset); }
+.mr-rail-thread-slot .ca-bubble { margin: 0 0 6px; }
+.mr-thread-slot .ca-sent, .mr-rail-thread-slot .ca-sent { margin: 2px 0 6px; font-size: 11.5px; line-height: 1.4; color: var(--text-faint); }
+.mr-thread-card .mr-thread-count { flex: none; margin-left: auto; font-size: 11px; color: var(--text-faint); white-space: nowrap; }
+.mr-thread-card .mr-note-resolved + .mr-thread-count { margin-left: 8px; }
+.mr-thread-card .mr-thread-count + .mr-thread-fold { margin-left: 0; }
+.mr-thread-foot { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.mr-thread-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 11px 3px 9px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background var(--t), border-color var(--t);
+}
+.mr-thread-pill svg { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.mr-thread-pill:hover { background: rgba(255, 255, 255, 0.05); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.mr-thread-pill:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+/* The line naming the thread sits on the mode-pill row (a box built with `heads`). */
+.mr-box:has(> .mr-box-head) { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 6px 10px; }
+.mr-box:has(> .mr-box-head) > :not(.mr-box-modes):not(.mr-box-head) { grid-column: 1 / -1; }
+.mr-box-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-muted); }
+.mr-box-head[hidden] { display: none; }
+.mr-thread-card {
+  box-sizing: border-box;
+  margin: 8px 8px 12px;
+  padding: 12px 14px;
+  font: 13px/1.6 var(--font-ui, system-ui, sans-serif);
+  text-align: left;
+  color: var(--text);
+  background: #171C25;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: var(--radius-card, 12px);
+  box-shadow: 0 12px 30px -14px rgba(0, 0, 0, 0.7);
+}
+.mr-thread-card > .mr-thread-head { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; font-size: 12px; color: var(--text-muted); }
+.mr-thread-card .mr-avatar { width: 22px; height: 22px; font-size: 9.5px; }
+.mr-thread-card .mr-thread-author { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 600; }
+.mr-thread-card .mr-thread-pos { font-family: var(--font-mono, "JetBrains Mono", monospace); font-size: 11px; color: var(--text-faint); }
+.mr-thread-card .mr-thread-time { flex: none; font-size: 11px; color: var(--text-faint); white-space: nowrap; }
+.mr-thread-card .mr-thread-time::before { content: "\00B7"; margin-right: 8px; }
+/* « résolu » is a coloured word (F1): sentence case, no tint, no capsule, pushed to the right edge before the fold button. */
+.mr-thread-card .mr-thread-head .mr-note-resolved {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--s-ok);
+  background: transparent;
+  border: 0;
+}
+.mr-thread-card .mr-note-resolved + .mr-thread-fold { margin-left: 0; }
+/* « Nouveau » chip (A7) on a note of the card, same look as the rail's: after the meta line, or above the body of the quiet first note. */
+.mr-thread-card .mr-note-new {
+  flex: none;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 999px;
+}
+.mr-thread-card .mr-note-item > .mr-note-new { display: inline-block; margin-bottom: 4px; }
+.mr-thread-card .mr-thread-fold {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  padding: 0;
+  font: inherit;
+  color: var(--text-faint);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.mr-thread-card .mr-thread-fold:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.mr-thread-card .mr-thread-fold:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.mr-thread-fold::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  box-sizing: border-box;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform var(--dur-height) var(--ease-out);
+}
+.mr-thread-fold[aria-expanded="false"]::before { transform: translateX(-2px) rotate(-45deg); }
+.mr-thread-card .mr-thread-summary { display: none; min-width: 0; font-size: 12.5px; line-height: 22px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-thread-card .mr-thread-body { margin-top: 8px; color: #D5DCE6; }
+.mr-thread-card .mr-note-body { font-size: 13px; line-height: 1.6; color: #D5DCE6; }
+.mr-thread-card .mr-note-body p { margin: 0; }
+.mr-thread-card .mr-note-body p + p { margin-top: 6px; }
+.mr-thread-card .mr-note-body code { font: 12px var(--font-mono, "JetBrains Mono", monospace); padding: 1px 5px; border-radius: 5px; background: rgba(255, 255, 255, 0.07); }
+.mr-thread-card .mr-note-body pre code { padding: 0; background: none; }
+/* Folded: avatar | summary | chevron on one row; the body (if still mid-fold) wraps under it. */
+.mr-thread-card:has(> .mr-thread-head .mr-thread-fold[aria-expanded="false"]) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 8px;
+  padding: 6px 8px 6px 12px;
+  background: transparent;
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+.mr-thread-card:has(> .mr-thread-head .mr-thread-fold[aria-expanded="false"]) > .mr-thread-head { display: contents; }
+.mr-thread-card:has(> .mr-thread-head .mr-thread-fold[aria-expanded="false"]) > .mr-thread-head > :not(.mr-avatar):not(.mr-thread-fold) { display: none; }
+.mr-thread-card:has(> .mr-thread-head .mr-thread-fold[aria-expanded="false"]) > .mr-thread-head > .mr-thread-fold { order: 3; margin-left: 0; }
+.mr-thread-card:has(> .mr-thread-head .mr-thread-fold[aria-expanded="false"]) > .mr-thread-summary { display: block; order: 2; flex: 1 1 0; }
+.mr-thread-card:has(> .mr-thread-head .mr-thread-fold[aria-expanded="false"]) > .mr-thread-body { order: 4; flex: 0 0 100%; }
+
+/* Ask bubbles and review drafts (R5 / R6): full-width rows under their line. .ca-slot sizes itself in cqw, so the file table is a size container. */
+.mr-diff .d2h-file-diff { container-type: inline-size; }
+.mr-draft-row > td, .mr-ask-row > td { padding: 0 !important; border: 0; background: var(--bg); white-space: normal; }
+.mr-drafts-bar { flex-shrink: 0; max-height: 30%; overflow-y: auto; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.mr-drafts-count { font-size: 11px; font-weight: 600; color: var(--text-muted); padding: 2px 0 4px; }
+.mr-drafts-error { font-size: 11.5px; color: var(--mr-danger); padding: 2px 0 4px; }
+.mr-drafts-bar .mr-draft { margin: 0 0 6px; }
+.mr-draft-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; font-size: 11px; color: var(--text-faint); min-width: 0; }
+.mr-draft-tag { flex-shrink: 0; font-weight: 600; color: var(--accent); }
+.mr-draft-pos { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mr-draft-error { color: var(--c-waiting, #FBBF77); }
+.mr-draft-uncertain, .mr-dialog-uncertain { font-weight: 600; } /* « peut-être publié »: a send timed out, never resent */
+.mr-draft-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12.5px; line-height: 1.45; color: var(--text); }
+.mr-draft-note { margin-top: 4px; font-size: 11.5px; color: var(--mr-danger); }
+.mr-draft-actions { display: flex; gap: 6px; margin-top: 6px; }
+.mr-draft-actions button { padding: 2px 10px; border-color: var(--border); }
+
+/* Send the review / approve (R7): the modal confirmations (#gp-mr-view is their positioning box). */
+.mr-dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  animation: mr-swap var(--dur-pop) var(--ease-out) backwards;
+}
+.mr-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 460px;
+  max-height: 100%;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-card, var(--radius));
+  box-shadow: var(--shadow-dialog, var(--shadow-3));
+  outline: none;
+  font-size: 12.5px;
+  animation: mr-pop var(--dur-pop) var(--ease-pop) backwards;
+}
+.mr-dialog-title { font-weight: 600; color: var(--text); }
+.mr-dialog-text { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.mr-dialog-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.mr-dialog-list:empty { display: none; }
+.mr-dialog-item { padding: 6px 8px; background: var(--bg); border: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent); border-radius: var(--radius); }
+.mr-dialog-pos { font-size: 11px; color: var(--text-faint); overflow-wrap: anywhere; }
+.mr-dialog-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; color: var(--text); }
+.mr-dialog-error, .mr-dialog-msg { font-size: 11.5px; color: var(--mr-danger); overflow-wrap: anywhere; }
+.mr-dialog-error { margin-top: 4px; }
+.mr-dialog-msg[hidden] { display: none; }
+.mr-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* ---- Motion classes (added by the modules; `backwards` keeps the element at its rest style once done) ---- */
+.mr-enter { animation: mr-enter var(--dur-pop) var(--ease-out) backwards; }
+.mr-pop { animation: mr-pop var(--dur-pop) var(--ease-pop) backwards; }
+.mr-swap { animation: mr-swap var(--dur-pop) var(--ease-out) backwards; }
+@keyframes mr-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes mr-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+@keyframes mr-swap { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mr-progress { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+/* The global kill-switch (`* { animation: none }`) skips pseudo-elements: the progress strip rests as a faint full bar. */
+@media (prefers-reduced-motion: reduce) {
+  .mr-enter, .mr-pop, .mr-swap, .mr-box, .mr-author-menu, .mr-dialog, .mr-dialog-backdrop,
+  .mr-cols.rail-open .mr-col-rail { animation: none; }
+  .mr-progress::before { animation: none; width: 100%; opacity: 0.45; }
+  .mr-step:not(.done):not(.fail)::before { animation: none; }
+  #gp-mr *, #gp-mr *::before { transition: none; }
+  .mr-thread-fold::before { transition: none; }
+}
+
+/* R3b (A4): a reply draft sits in its thread card after the notes, as the dashed line-draft card; the card already insets it. */
+.mr-thread-drafts:empty { display: none; }
+.mr-thread-card .mr-draft, .mr-wide .mr-thread-card .mr-draft { max-width: none; margin: 10px 0 0; }
+.mr-thread-drafts .mr-draft + .mr-draft { margin-top: 6px; }
+.mr-draft-reply .mr-draft-head { flex-wrap: wrap; gap: 0; }
+.mr-draft-reply .mr-draft-sep { white-space: pre; }
+.mr-draft-reply .mr-draft-error { margin-left: 8px; }
+.mr-thread-card .mr-draft-reply .mr-draft-body { font-size: 13px; line-height: 1.6; }
+.mr-draft-reply .mr-draft-actions button { border-radius: 999px; }
+/* W5: the reply draft of a general thread sits in its rail item's slot, as wide as the item's other blocks. */
+.mr-rail-thread-slot .mr-draft { max-width: none; margin: 0 0 6px; }
+.mr-rail-thread-slot .mr-draft-reply .mr-draft-body { font-size: 12.5px; }

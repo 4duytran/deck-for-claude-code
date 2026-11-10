@@ -1,0 +1,5 @@
+{
+  "name": "room-mirror",
+  "version": "0.1.0",
+  "description": "Mirrors a SendMessage to a room member into the deck room feed (feed-only, never alters the send)"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "fake",
+  "label": "Plugin factice",
+  "description": "Fixture de plugin-runner-probe : enregistre son environnement, ecrit un rapport.",
+  "argv": ["run.py"],
+  "trigger": "manual",
+  "env": [
+    { "name": "FAKE_TOKEN", "label": "Jeton factice", "required": true, "hints": ["FAKE", "TOKEN"] },
+    { "name": "FAKE_OPT", "label": "Option factice", "required": false, "hints": ["FAKE", "OPT"] }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "id": "Bad_ID",
+  "label": "Plugin invalide",
+  "description": "Identifiant refuse par le manifeste.",
+  "argv": ["run.sh"],
+  "trigger": "manual"
+}

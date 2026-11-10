@@ -1,0 +1,64 @@
+# agent-lifecycle-seed
+
+Synthetic fixture for three probes: `agent-lifecycle-seed-probe`, `agent-lifecycle-core-probe` and
+`agent-own-evidence-probe`. They guard one defect: a sub-agent ends with a hand-back tail in its OWN transcript
+(`agent-<id>.jsonl`), the parent transcript never records a completion for it, and the session list kept saying
+`running` long after the agent was done.
+
+Nothing here comes from a real session. Every record is built by hand in `build-fixture.js` from the SHAPE of a real
+one (record types and keys); ids, text and paths are neutral. The timestamps are literal constants, chosen so the
+literals hard-coded in the probes hold.
+
+## Layout
+
+Same relative layout as one project folder under `~/.claude/projects`. A probe places this directory (or a copy, or
+symlinks to its files) as ONE project folder inside a throwaway projects root (`CLAUDE_DECK_PROJECTS_DIR=<root>`);
+`findSessionFile` only descends one level, so the root must hold it.
+
+    00000000-0000-4000-8000-00000000a001.jsonl                         main transcript, 7 records
+    00000000-0000-4000-8000-00000000a001/subagents/
+        agent-a0000000000000a01.jsonl                                  the sub-agent's own transcript, 22 records
+        agent-a0000000000000a01.meta.json                              the dispatch meta (matched by toolUseId)
+    build-fixture.js                                                   regenerates the three files
+
+Neutral values: session id `00000000-0000-4000-8000-00000000a001`, agent id `a0000000000000a01`, dispatch id (the
+parent's `Agent` tool_use) `toolu_00000000000000000000d001`, cwd `/home/user/project`, version `0.0.0`.
+
+## What the gates read
+
+Main transcript (parent side):
+
+| record | ts | role |
+|---|---|---|
+| 1 | 17:35:29.174Z | the `Agent` dispatch (`subagent_type`, `run_in_background`): the ledger entry keyed by the dispatch id |
+| 2 | 17:35:54.370Z | the async-launch ack with `toolUseResult.agentId`: joins the dispatch to the own file |
+| 3, 4 | 17:51:46.045Z | the parent-side "waiting" notice (queue-operation + queued_command), 6 ms after the first own tail |
+| 5, 6 | 17:57:45Z, 17:58:30Z | the parent keeps writing after the final tail |
+
+The main transcript holds NO completion for the dispatch id (no non-waiting task notification, no non-ack result for
+it): a ledger `final` would win over the own tail and hide the defect.
+
+Own transcript (all `isSidechain: true`, 0-based indices):
+
+| index | ts | role |
+|---|---|---|
+| 5-7, 8-10 | 17:46-17:50 | two background children, each opened by an assistant `run_in_background` tool_use and closed by its task notification (`maxOpen` 1, back to 0) |
+| 11, 12, 13 | 17:51:45.308Z .. 17:51:46.039Z | first tail: handback tool_use, its tool_result, the stop-hook attachment, 0 open children: the file is terminal here |
+| 14 | 17:57:07.026Z | wake-up (a task notification as a user string): clears the terminal state, the agent runs again |
+| 17, 18 | 17:57:11Z | end_turn answer, then a user string (not terminal: the stop is not last, no hand-back result yet) |
+| 19, 20, 21 | 17:57:28.464Z .. 17:57:28.829Z | final tail: handback tool_use -> tool_result -> stop-hook attachment, all sidechain. The documented tail |
+| 2 | none | an `api-request-blob` with no timestamp, so the fold's "no usable ts counts for nothing" path stays covered |
+
+Terminal prefixes of the own file are exactly indices 13 and 21 (`seed_terminal_only_on_stop_tail`). The gap between the
+first tail (17:51:46.039Z) and the wake-up (17:57:07.026Z) is the window where the parent's waiting notice must not
+beat the own tail (`own_tail_wins_over_parent_waiting_notice`).
+
+## Changing it
+
+Edit `build-fixture.js`, run `node test/fixtures/agent-lifecycle-seed/build-fixture.js`, then update, in the probes,
+the byte sizes pinned by `fixture_intact` (agent-lifecycle-seed-probe), the record count of `seed_fixture_present` and
+the terminal indices of `seed_terminal_only_on_stop_tail` (agent-lifecycle-core-probe). Keep the timestamps the probes
+hard-code: 17:51:46.039Z (first tail), 17:57:07.026Z (wake-up), 17:57:28.829Z (final tail).
+
+To see the gates guard the defect, drop the last three records of the own transcript (the final tail) and run the seed
+and own-evidence probes: the tail gates fail.

@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- 'self' = local files only; xterm injects runtime styles -> 'unsafe-inline' for styles.
+       img-src adds data: for images that arrive inline as data: URLs. An optional external
+       module still relies on it and the deck's other uses are not audited, so it stays. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src deckpage: http: https: slack:">
+  <title>Claude Deck</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+  <!-- v39: diff2html BEFORE style.css so the deck dark overrides win. -->
+  <link rel="stylesheet" href="../node_modules/diff2html/bundles/css/diff2html.min.css">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="css/ask-drawer.css">
+  <link rel="stylesheet" href="css/mr-review.css">
+  <link rel="stylesheet" href="css/git-log.css">
+  <link rel="stylesheet" href="css/usage-page.css">
+</head>
+<body>
+  <!-- Thin app header (Verre layout): brand left, mode switch centred, tools right. -->
+  <header id="app-header">
+    <div id="header-left">
+    <!-- Sessions sidebar fold (sidebar.js): toggles body.sb-mini, state in memory. -->
+    <button id="sidebar-fold" type="button" aria-expanded="true"
+            aria-label="Replier la barre latérale" title="Replier la barre latérale">
+      <svg width="15" height="15" aria-hidden="true"><use href="#lc-panel-left"></use></svg>
+    </button>
+    <div id="brand">
+      <span id="brand-mark" aria-hidden="true"><svg width="14" height="14"><use href="#lc-terminal"/></svg></span>
+      <h1>Claude Deck</h1>
+    </div>
+    </div>
+    <!-- v20: the mode switch lives in the header (not the sidebar): a sidebar-hosted
+         switch forced an empty deck column in AI mode, doubling claude.ai's own sidebar. -->
+    <nav id="mode-switch" role="tablist" aria-label="Mode">
+      <button id="mode-code" class="mode-tab active" role="tab" aria-selected="true" title="Claude Code">
+        <svg width="14" height="14" aria-hidden="true"><use href="#lc-terminal"></use></svg><span class="hdr-lbl">Claude Code</span>
+      </button>
+      <button id="mode-ai" class="mode-tab" role="tab" aria-selected="false" title="Claude AI">
+        <svg width="14" height="14" aria-hidden="true"><use href="#lc-sparkles"></use></svg><span class="hdr-lbl">Claude AI</span>
+      </button>
+    </nav>
+    <!-- Priority+ toolbar (header-tools.js): when the bar is too narrow it folds by steps, then sends the
+         [data-prio] controls into the « ⋯ » menu, the LOWEST number first. A new tool = a button here with its
+         own data-prio (an id, an icon and a .hdr-lbl label span); no JS change. -->
+    <div id="header-right">
+    <!-- Session count (A6): « N sessions · M attend », filled by sidebar.js
+         updateSessionPill() from the rendered rows; empty = hidden. Text tools and gauges below
+         are flat (style.css); the separators are drawn by the tool that follows them. -->
+    <span id="session-pill" class="hdr-pill" data-prio="5"></span>
+    <!-- Room — inter-session chat toggle (opens the #room-panel overlay). The
+         badge shows unread count while the panel is closed. -->
+    <button id="room-toggle" class="hdr-tool" data-prio="2" title="Room &mdash; chat inter-sessions">
+      <svg width="15" height="15" aria-hidden="true"><use href="#lc-messages-square"></use></svg><span class="hdr-lbl">Room</span><span id="room-badge" data-badge hidden>0</span>
+    </button>
+    <button id="plugin-toggle" class="hdr-tool" data-prio="1" type="button" title="Plugins" aria-label="Plugins">
+      <svg width="15" height="15" aria-hidden="true"><use href="#lc-plug"></use></svg><span class="hdr-lbl">Plugins</span>
+    </button>
+    <!-- v22: AI-mode escape hatch — some claude.ai pages (/design…) drop the
+         native sidebar and strand the user; this routes navigationHistory.goBack(). -->
+    <button id="ai-back" title="Retour (page pr&eacute;c&eacute;dente claude.ai)">
+      <!-- Inline SVG arrow (same stroke language as the brand mark) — a font
+           glyph ← renders cheap; a stroked vector stays crisp at any zoom. -->
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M9.5 3.5 L5 8 L9.5 12.5" fill="none" stroke="currentColor"
+              stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <line x1="5.2" y1="8" x2="13" y2="8" stroke="currentColor"
+              stroke-width="1.8" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <!-- Usage quotas (5h/7j) — v35 hybrid: official deck-usage.json (collector
+         injected per deck session) merged with the transcript estimator; each
+         gauge carries a source badge (✓ server / ~ local) + tooltip. -->
+    <!-- Line meters: label + badge, a 2 x 56 px line (.g-ring-wrap), figure, reset time. renderGauge
+         (usage.js) still reads the <circle class="g-arc"> radius, so the ring SVG stays in each gauge, not
+         drawn (style.css); the line is filled from --p set on .gauge. -->
+    <div id="usage" title="Quotas Claude — officiel (statusline) + estimation locale">
+      <div class="gauge" id="gauge-5h" data-level="none">
+        <span class="g-ring-wrap">
+          <svg class="g-ring" width="20" height="20" viewBox="0 0 38 38" aria-hidden="true">
+            <circle class="g-track" cx="19" cy="19" r="16"/>
+            <circle class="g-arc" cx="19" cy="19" r="16"/>
+          </svg>
+        </span>
+        <span class="g-meta">
+          <span class="g-label">5h <span class="g-src"></span></span>
+          <span class="g-pct">&mdash;</span>
+          <span class="g-reset"></span>
+        </span>
+      </div>
+      <div class="gauge" id="gauge-7d" data-level="none">
+        <span class="g-ring-wrap">
+          <svg class="g-ring" width="20" height="20" viewBox="0 0 38 38" aria-hidden="true">
+            <circle class="g-track" cx="19" cy="19" r="16"/>
+            <circle class="g-arc" cx="19" cy="19" r="16"/>
+          </svg>
+        </span>
+        <span class="g-meta">
+          <span class="g-label">7j <span class="g-src"></span></span>
+          <span class="g-pct">&mdash;</span>
+          <span class="g-reset"></span>
+        </span>
+      </div>
+      <!-- L27: usage page entry (static markup: the space is always reserved).
+           A click on either gauge above opens the same page on « Limites ». -->
+      <button id="usage-open" class="hdr-tool" data-prio="4" type="button" title="Usage — coût, tokens et limites">
+        <svg width="15" height="15" aria-hidden="true"><use href="#lc-chart-line"></use></svg><span class="hdr-lbl">Usage</span>
+      </button>
+    </div>
+    <!-- « ⋯ »: shown only while a tool lives in the menu below (header-tools.js). The dot says Room has unread. -->
+    <button id="hdr-more" class="hdr-tool" type="button" title="Plus d'outils" aria-label="Plus d'outils"
+            aria-haspopup="menu" aria-expanded="false" aria-controls="hdr-menu">
+      <svg width="16" height="16" aria-hidden="true"><use href="#lc-ellipsis"></use></svg><span class="hdr-dot" aria-hidden="true"></span>
+    </button>
+    </div>
+    <div id="hdr-menu" role="menu" aria-label="Plus d'outils"></div>
+  </header>
+
+  <div id="main-row">
+    <!-- Past sessions, grouped by project, click to resume. Live status badges. -->
+    <aside id="sidebar">
+      <!-- Variant A « Barre compacte »: one title row (title, refresh, « + » = the new-session
+           button, a 28 px icon named by title + aria-label), the search field holding the workspace
+           filter pill, then the status chips as one segmented track. -->
+      <header>
+        <h2>Sessions</h2>
+        <button id="refresh-sessions" title="Actualiser" aria-label="Actualiser"><svg width="14" height="14" aria-hidden="true"><use href="#lc-refresh-cw"/></svg></button>
+        <button id="new-session" type="button" title="Nouvelle session" aria-label="Nouvelle session">
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <line x1="7" y1="2.5" x2="7" y2="11.5" stroke="currentColor"
+                  stroke-width="1.9" stroke-linecap="round"/>
+            <line x1="2.5" y1="7" x2="11.5" y2="7" stroke="currentColor"
+                  stroke-width="1.9" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </header>
+      <div id="session-search">
+        <svg width="14" height="14" aria-hidden="true"><use href="#lc-search"/></svg>
+        <input id="session-search-input" type="text" placeholder="Rechercher…"
+               aria-label="Rechercher une session" autocomplete="off" spellcheck="false">
+        <div id="session-ws">
+          <!-- sidebar.js writes the count and the accessible name (aria-label + title: « Filtrer par workspace : <label> »). -->
+          <button type="button" id="session-ws-filter" aria-haspopup="true" aria-expanded="false"
+                  aria-controls="session-ws-pop" aria-label="Filtrer par workspace : Tous les workspaces"
+                  title="Filtrer par workspace : Tous les workspaces"><svg width="12" height="12" aria-hidden="true"><use href="#lc-layers"/></svg><span class="ws-count"></span><svg width="12" height="12" aria-hidden="true"><use href="#lc-chevron-down"/></svg></button>
+          <div id="session-ws-pop" role="menu" aria-label="Workspaces" hidden></div>
+        </div>
+      </div>
+      <div id="session-filters" role="group" aria-label="Filtrer par statut">
+        <button type="button" class="aj-filter" data-filter="all" aria-pressed="true">Toutes</button>
+        <button type="button" class="aj-filter" data-filter="open" aria-pressed="false">Ouvertes</button>
+        <button type="button" class="aj-filter" data-filter="busy" aria-pressed="false">En cours</button>
+        <button type="button" class="aj-filter" data-filter="mine" aria-pressed="false">&Agrave; toi</button>
+      </div>
+      <p id="session-filter-empty" hidden>Aucune session ne correspond</p>
+      <div id="session-list"></div>
+    </aside>
+
+    <!-- Live terminal grid -->
+    <main id="workspace">
+      <div id="grid"><div id="grid-empty">
+        <!-- New-session home (renderer/js/new-session.js): shown while no pane is selected. The composer
+             reuses the chat composer's classes (Calme frame, pills, teal send button). -->
+        <div class="ns-home" id="ns-home">
+          <div class="ns-greet">
+            <div class="ns-mark"><svg width="16" height="16" aria-hidden="true"><use href="#lc-terminal"/></svg></div>
+            <h2>Sur quoi travaille-t-on ?</h2>
+            <p>Une nouvelle session Claude Code d&eacute;marre dans le dossier choisi.</p>
+          </div>
+          <div class="chat-input-wrap ns-composer">
+            <textarea class="chat-input ns-input" id="ns-input" rows="2"
+              placeholder="D&eacute;cris la t&acirc;che&hellip; (facultatif)" aria-label="Premier message (facultatif)"></textarea>
+            <div class="chat-input-bar">
+              <div class="cc-mode-dd">
+                <button class="cc-mode-btn" id="ns-pill-mode" type="button" aria-haspopup="menu" aria-expanded="false"
+                  title="Mode de permissions de la session">
+                  <svg class="cc-ico" width="14" height="14" aria-hidden="true"><use href="#lc-gauge"/></svg><span class="cc-mode-label">normal</span><span class="dd-chev">&#9662;</span>
+                </button>
+                <div class="cc-mode-menu" role="menu" hidden></div>
+              </div>
+              <div class="cc-model-dd">
+                <button class="cc-model-btn" id="ns-pill-model" type="button" aria-haspopup="menu" aria-expanded="false"
+                  title="Mod&egrave;le de la session">
+                  <svg class="cc-ico" width="14" height="14" aria-hidden="true"><use href="#lc-cpu"/></svg><span class="cc-model-label">Mod&egrave;le</span><span class="dd-chev">&#9662;</span>
+                </button>
+                <div class="cc-model-menu" role="menu" hidden></div>
+              </div>
+              <div class="cc-effort-dd">
+                <button class="cc-effort-btn" id="ns-pill-effort" type="button" aria-haspopup="menu" aria-expanded="false"
+                  title="Effort de la session">
+                  <svg class="cc-ico" width="14" height="14" aria-hidden="true"><use href="#lc-brain"/></svg><span class="cc-effort-label">Effort</span><span class="dd-chev">&#9662;</span>
+                </button>
+                <div class="cc-effort-menu" role="menu" hidden></div>
+              </div>
+              <span class="cc-spacer"></span>
+              <button class="chat-send" id="ns-send" type="button" title="D&eacute;marrer la session (Entr&eacute;e)" aria-label="D&eacute;marrer la session">
+                <svg class="ic-send" width="16" height="16" aria-hidden="true"><use href="#lc-arrow-up"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="ns-under">
+            <div class="ns-ws">
+              <button class="ns-ws-btn" id="ns-ws-btn" type="button" aria-haspopup="listbox" aria-expanded="false" title="Dossier de la session">
+                <svg width="14" height="14" aria-hidden="true"><use href="#lc-folder"/></svg>
+                <span class="ns-ws-nm"></span><span class="ns-ws-pt"></span>
+                <svg class="ns-ws-chev" width="10" height="10" aria-hidden="true"><use href="#lc-chevron-down"/></svg>
+              </button>
+            </div>
+            <span class="ns-dot" aria-hidden="true">&middot;</span>
+            <label class="ns-name">
+              <input id="ns-name" type="text" maxlength="200" autocomplete="off" spellcheck="false"
+                placeholder="Nom de session (facultatif)" aria-label="Nom de session (facultatif)">
+            </label>
+            <span class="ns-hint"><kbd>Entr&eacute;e</kbd> d&eacute;marre</span>
+          </div>
+        </div>
+      </div></div>
+      <!-- AI mode placeholder (v19): an empty DOM rect — the NATIVE claude.ai
+           view (main process) is positioned over it via measured bounds. -->
+      <div id="ai-frame"></div>
+      <!-- #git-panel / #plans-panel (v39 / v40) moved into #side-panel below (P1-09). -->
+      <!-- Room panel — the inter-session chat the human SEES and posts into.
+           Same overlay shell as the git/plans panels (slide-in, .open). The
+           feed is fed live by the room router (rooms.js -> 'room-append'); a
+           human post goes out as from:'user' (label 'you'), routed like any
+           CLI post. -->
+      <aside id="room-panel" hidden>
+        <header id="rp-head">
+          <span id="rp-title">Room</span>
+          <span id="rp-who"></span>
+          <label id="rp-count-wrap" title="Nombre de messages affich&eacute;s">
+            <span class="rp-count-label">Afficher</span>
+            <select id="rp-count">
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="0">Tout</option>
+            </select>
+          </label>
+          <span class="gp-head-actions">
+            <button id="rp-clear" title="Vider la room (effacer tous les messages)">&#129529;</button>
+            <button id="rp-refresh" title="Rafra&icirc;chir" aria-label="Rafra&icirc;chir"><svg width="14" height="14" aria-hidden="true"><use href="#lc-refresh-cw"/></svg></button>
+            <button id="rp-close" title="Fermer (Esc)">&#10005;</button>
+          </span>
+        </header>
+        <div id="rp-feed" tabindex="0"></div>
+        <form id="rp-composer" autocomplete="off">
+          <select id="rp-to" title="Destinataire"></select>
+          <input id="rp-input" type="text" placeholder="Message &agrave; la room&hellip;" />
+          <button id="rp-send" type="submit">Envoyer</button>
+        </form>
+      </aside>
+      <!-- Plugins panel — plugin host (daily-brief): the Room overlay shell, opened by #plugin-toggle in the header, closed by
+           Escape or #plg-close. Rows and the report frame are built in JS (renderer/js/plugin-panel.js). -->
+      <aside id="plugin-panel" hidden tabindex="-1" aria-label="Plugins">
+        <header id="plg-head">
+          <span id="plg-title">Plugins</span>
+          <span id="plg-count"></span>
+          <button id="plg-import" type="button" disabled>Importer un plugin…</button>
+          <button id="plg-close" type="button" title="Fermer (Esc)" aria-label="Fermer le panneau">&#10005;</button>
+        </header>
+        <!-- Two pages (K5), told apart by #plugin-panel[data-page="list"|"detail"] (no attribute: both shown). Content of #plg-dhead, #plg-settings
+             and the access card is built in plugin-panel.js. #plg-view and #plg-full stay direct children of #plg-body: initPluginPanel inserts the
+             tabs (#plg-detail) before #plg-view and the history (#plg-hist) after it, and insertBefore throws when the reference node is nested deeper. -->
+        <div id="plg-body">
+          <div id="plg-page-list">
+            <div id="plg-empty" hidden>
+              <p class="plg-empty-title">Aucun plugin installé</p>
+              <p class="plg-empty-hint">Un plugin est un dossier qui contient un fichier deck-plugin.json.</p>
+            </div>
+            <div id="plg-list" role="list" aria-label="Plugins installés" hidden></div>
+          </div>
+          <div id="plg-page-detail">
+            <button id="plg-back" type="button" aria-label="Retour à la liste des plugins"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 6 9 12 15 18"/></svg>Plugins</button>
+            <div id="plg-dhead"></div>
+            <div id="plg-settings"></div>
+          </div>
+          <div id="plg-view" aria-label="Rapport"></div>
+          <!-- S10: parked here while #plg-view holds no report frame; plugin-full.js moves it into the view's corner when one is shown. -->
+          <button id="plg-full" type="button" hidden aria-pressed="false">Plein écran</button>
+        </div>
+      </aside>
+      <!-- S6a: agent journal — per-agent read-only event feed (text + tool
+           calls), same right-overlay shell family as #git-panel/#plans-panel/
+           #room-panel, own fixed width. Entry points (sidebar row, chat
+           dispatch card) and exclusivity with the other panels land in S6b. -->
+      <aside id="agent-journal" hidden>
+        <header id="aj-head">
+          <span id="aj-type"></span>
+          <span id="aj-status" class="aj-status"></span>
+          <span id="aj-elapsed" class="aj-elapsed"></span>
+          <span class="aj-readonly">Lecture seule</span>
+          <span class="gp-head-actions">
+            <button class="aj-close" title="Fermer le journal de l'agent">&#10005;</button>
+          </span>
+        </header>
+        <div id="aj-desc"></div>
+        <div id="aj-meta"></div>
+        <div class="aj-toolbar" role="group" aria-label="Filtrer le journal">
+          <button type="button" class="aj-filter" data-filter="all" aria-pressed="true">Tout</button>
+          <button type="button" class="aj-filter" data-filter="text" aria-pressed="false">Texte</button>
+          <button type="button" class="aj-filter" data-filter="tools" aria-pressed="false">Outils</button>
+        </div>
+        <div id="aj-feed" class="aj-feed" tabindex="0"></div>
+        <footer id="aj-foot" class="aj-foot">
+          <span class="aj-live-dot" aria-hidden="true"></span>
+          <span id="aj-foot-label" class="aj-foot-label"></span>
+        </footer>
+      </aside>
+    </main>
+
+    <!-- P1-09: docked, resizable right panel (split beside the session). Tabs host
+         the Files slot (filled by P1-10) and the git / plans panels (ids and inner
+         markup unchanged: JS and probes hook on them). Code mode; setMode('ai')
+         closes it (the native AI view always draws above the DOM). -->
+    <aside id="side-panel" hidden aria-label="Panneau latéral">
+      <div id="sp-resize" role="separator" aria-orientation="vertical" aria-label="Redimensionner le panneau" tabindex="0"></div>
+      <header id="sp-head">
+        <div id="sp-tabs" role="tablist" aria-label="Onglets du panneau">
+          <button class="sp-tab" data-tab="files" role="tab" aria-selected="false" tabindex="-1" title="Fichiers" aria-label="Fichiers"><svg width="14" height="14" aria-hidden="true"><use href="#lc-folder"/></svg><span>Fichiers</span></button>
+          <button class="sp-tab" data-tab="git" role="tab" aria-selected="false" tabindex="-1" title="Git" aria-label="Git"><svg width="14" height="14" aria-hidden="true"><use href="#lc-git-branch"/></svg><span>Git</span></button>
+          <button class="sp-tab" data-tab="plans" role="tab" aria-selected="false" tabindex="-1" title="Plans" aria-label="Plans"><svg width="14" height="14" aria-hidden="true"><use href="#lc-file-text"/></svg><span>Plans</span></button>
+          <button class="sp-tab" data-tab="terminal" role="tab" aria-selected="false" tabindex="-1" title="Terminal" aria-label="Terminal"><svg width="14" height="14" aria-hidden="true"><use href="#lc-terminal"/></svg><span>Terminal</span></button>
+        </div>
+        <button id="sp-max" title="Agrandir" aria-label="Agrandir"><svg class="sp-ico-expand" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" x2="14" y1="3" y2="10"/><line x1="3" x2="10" y1="21" y2="14"/></svg><svg class="sp-ico-shrink" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" x2="21" y1="10" y2="3"/><line x1="3" x2="10" y1="21" y2="14"/></svg></button>
+        <button id="sp-close" title="Fermer (Esc)" aria-label="Fermer le panneau"><svg width="14" height="14" aria-hidden="true"><use href="#lc-x"/></svg></button>
+      </header>
+      <div id="sp-body">
+        <!-- Terminal tab — one xterm host per pane, built in JS (renderer/js/terminal-panel.js). -->
+        <aside id="terminal-panel" hidden aria-label="Terminal"></aside>
+        <!-- P1-10: Fichiers tab — search, lazy tree, file viewer (renderer/js/files-panel.js; rows are built in JS). -->
+        <aside id="files-panel" hidden>
+          <header id="fp-head">
+            <label id="fp-search-wrap">
+              <svg width="14" height="14" aria-hidden="true"><use href="#lc-search"/></svg>
+              <input id="fp-search" type="text" placeholder="Rechercher des fichiers" aria-label="Rechercher des fichiers" maxlength="200" autocomplete="off" spellcheck="false">
+            </label>
+            <button id="fp-all" class="fp-btn" type="button" title="Tout déplier" aria-label="Tout déplier"><svg width="14" height="14" aria-hidden="true"><use href="#lc-chevron-down"/></svg></button>
+            <button id="fp-refresh" class="fp-btn" type="button" title="Rafraîchir" aria-label="Rafraîchir"><svg width="14" height="14" aria-hidden="true"><use href="#lc-refresh-cw"/></svg></button>
+          </header>
+          <div id="fp-tree" role="tree" aria-label="Fichiers de la session"></div>
+          <div id="fp-results" role="listbox" aria-label="Résultats de la recherche" hidden></div>
+          <div id="fp-viewer" hidden>
+            <header id="fp-vhead">
+              <button id="fp-back" class="fp-btn" type="button" title="Retour aux fichiers (Esc)" aria-label="Retour aux fichiers"><svg width="14" height="14" aria-hidden="true"><use href="#lc-chevron-left"/></svg></button>
+              <span id="fp-crumb"></span>
+              <button id="fp-vrefresh" class="fp-btn" type="button" title="Relire le fichier" aria-label="Relire le fichier"><svg width="14" height="14" aria-hidden="true"><use href="#lc-refresh-cw"/></svg></button>
+            </header>
+            <div id="fp-vbody" tabindex="0"></div>
+            <!-- Parked here while #fp-vbody holds no HTML page frame; files-full.js moves it into the view's corner when one is shown. -->
+            <button id="fp-full" type="button" hidden aria-pressed="false">Plein écran</button>
+            <div id="fp-asks" class="pp-ask-dock" hidden aria-label="Réponses de Claude"></div>
+          </div>
+        </aside>
+        <!-- v39: git panel — read-only review of the session's workspace before commit. -->
+        <aside id="git-panel" hidden>
+          <header id="gp-head">
+            <span id="gp-repo"></span>
+            <span id="gp-branch"></span>
+            <span id="glog-badge"></span>
+            <span id="glog-state"></span>
+            <button id="gp-mr-btn" type="button" hidden title="Merge requests ouvertes du dépôt">Merge requests</button>
+            <span class="gp-head-actions">
+              <button id="gp-refresh" title="Rafraîchir le status" aria-label="Rafraîchir le status"><svg width="14" height="14" aria-hidden="true"><use href="#lc-refresh-cw"/></svg></button>
+              <button id="gp-close" title="Fermer (Esc)">&#10005;</button>
+            </span>
+          </header>
+          <div id="gp-body">
+            <div class="glog-cols">
+              <nav id="glog-refs" aria-label="Branches"></nav>
+              <section id="glog-log" aria-label="Historique">
+                <div id="glog-diff" class="glog-diff" role="region" aria-label="Diff du fichier" hidden>
+                  <div class="glog-diff-head">
+                    <button class="glog-diff-back" type="button">← Historique</button>
+                    <button class="glog-diff-close" type="button" aria-label="Fermer le diff">&#10005;</button>
+                  </div>
+                  <div id="gp-diff" tabindex="0"></div>
+                </div>
+              </section>
+              <aside id="glog-detail" aria-label="Détail">
+                <div id="glog-wip-head">
+                  <div class="glog-kicker">Pas encore commité</div>
+                  <h2>Modifications non commitées</h2>
+                  <p>Les fichiers changés depuis le dernier commit. Après un commit, ils passent dans l’historique et cette ligne disparaît.</p>
+                </div>
+                <div id="glog-commit" hidden></div>
+                <div id="gp-files" tabindex="0"></div>
+              </aside>
+            </div>
+            <div id="gp-mr" hidden>
+              <div class="mr-head">
+                <button id="gp-mr-back" type="button">← Retour</button>
+                <span class="mr-heading">Merge requests ouvertes</span>
+              </div>
+              <div id="gp-mr-note" class="mr-note" hidden></div>
+              <div id="gp-mr-list" tabindex="0"></div>
+            </div>
+          </div>
+        </aside>
+        <!-- v40: plans panel — the list = plans this session made or consumed
+             (transcript truth); the view renders the selected plan's markdown
+             (markdown-it, html:false). -->
+        <aside id="plans-panel" hidden>
+          <header id="pp-head">
+            <span id="pp-title">Plans de la session</span>
+            <span id="pp-count"></span>
+            <span class="gp-head-actions">
+              <button id="pp-html-only" class="pp-filter" aria-pressed="false" title="Afficher seulement les plans HTML">HTML</button>
+              <button id="pp-refresh" title="Rafraîchir la liste" aria-label="Rafraîchir la liste"><svg width="14" height="14" aria-hidden="true"><use href="#lc-refresh-cw"/></svg></button>
+              <button id="pp-close" title="Fermer (Esc)">&#10005;</button>
+            </span>
+          </header>
+          <div id="pp-body">
+            <div id="pp-list" tabindex="0"></div>
+            <div id="pp-view" tabindex="0"></div>
+            <!-- Parked here while #pp-view holds no HTML plan frame; plans-full.js moves it into the view's corner when one is shown. -->
+            <button id="pp-full" type="button" hidden aria-pressed="false">Plein écran</button>
+          </div>
+          <div id="pp-asks" class="pp-ask-dock" hidden aria-label="Réponses de Claude"></div>
+        </aside>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Lucide icon sprite (deck-modern-ui L10): 30 symbols copied from vendor/lucide/*.svg,
+       used as <use href="#lc-NAME">. Same inline pattern as #wx-sprite (no request, CSP
+       unchanged). Each symbol keeps the Lucide root attributes (24 grid, no fill, stroke
+       currentColor, width 2, round caps and joins): the slot only sets size and colour. -->
+  <svg id="lc-sprite" hidden aria-hidden="true" focusable="false" width="0" height="0">
+    <defs>
+      <symbol id="lc-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m6 9 6 6 6-6"></path>
+      </symbol>
+      <symbol id="lc-chevron-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m18 15-6-6-6 6"></path>
+      </symbol>
+      <symbol id="lc-chevron-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m15 18-6-6 6-6"></path>
+      </symbol>
+      <symbol id="lc-chevron-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m9 18 6-6-6-6"></path>
+      </symbol>
+      <symbol id="lc-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 6 9 17l-5-5"></path>
+      </symbol>
+      <symbol id="lc-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 6 6 18"></path>
+        <path d="m6 6 12 12"></path>
+      </symbol>
+      <symbol id="lc-circle-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+        <path d="M12 17h.01"></path>
+      </symbol>
+      <symbol id="lc-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 19h8"></path>
+        <path d="m4 17 6-6-6-6"></path>
+      </symbol>
+      <symbol id="lc-message-square" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"></path>
+      </symbol>
+      <symbol id="lc-chart-line" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 3v16a2 2 0 0 0 2 2h16"></path>
+        <path d="m19 9-5 5-4-4-3 3"></path>
+      </symbol>
+      <symbol id="lc-coins" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13.744 17.736a6 6 0 1 1-7.48-7.48"></path>
+        <path d="M15 6h1v4"></path>
+        <path d="m6.134 14.768.866-.5 2 3.464"></path>
+        <circle cx="16" cy="8" r="6"></circle>
+      </symbol>
+      <symbol id="lc-gauge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m12 14 4-4"></path>
+        <path d="M3.34 19a10 10 0 1 1 17.32 0"></path>
+      </symbol>
+      <symbol id="lc-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <path d="M12 6v6l4 2"></path>
+      </symbol>
+      <symbol id="lc-refresh-cw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+        <path d="M21 3v5h-5"></path>
+        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+        <path d="M8 16H3v5"></path>
+      </symbol>
+      <symbol id="lc-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path>
+        <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"></path>
+        <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"></path>
+      </symbol>
+      <symbol id="lc-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20v2"></path>
+        <path d="M12 2v2"></path>
+        <path d="M17 20v2"></path>
+        <path d="M17 2v2"></path>
+        <path d="M2 12h2"></path>
+        <path d="M2 17h2"></path>
+        <path d="M2 7h2"></path>
+        <path d="M20 12h2"></path>
+        <path d="M20 17h2"></path>
+        <path d="M20 7h2"></path>
+        <path d="M7 20v2"></path>
+        <path d="M7 2v2"></path>
+        <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+        <rect x="8" y="8" width="8" height="8" rx="1"></rect>
+      </symbol>
+      <!-- branch chip, P1-11 -->
+      <symbol id="lc-git-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="6" y1="3" x2="6" y2="15"></line>
+        <circle cx="18" cy="6" r="3"></circle>
+        <circle cx="6" cy="18" r="3"></circle>
+        <path d="M18 9a9 9 0 0 1-9 9"></path>
+      </symbol>
+      <!-- Fichiers search, P1-10 -->
+      <symbol id="lc-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="7"></circle>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      </symbol>
+      <!-- attach button, P1-19 -->
+      <symbol id="lc-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551"></path>
+      </symbol>
+      <!-- mention button, P1-20 -->
+      <symbol id="lc-at-sign" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"></path>
+      </symbol>
+      <!-- file tree, P1-10 -->
+      <symbol id="lc-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>
+      </symbol>
+      <!-- file tree, P1-10 -->
+      <symbol id="lc-folder-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"></path>
+      </symbol>
+      <!-- file tree, P1-10 -->
+      <symbol id="lc-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+        <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+      </symbol>
+      <!-- file tree P1-10 and header toggle P1-11 -->
+      <symbol id="lc-file-text" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"></path>
+        <path d="M14 2v5a1 1 0 0 0 1 1h5"></path>
+        <path d="M10 9H8"></path>
+        <path d="M16 13H8"></path>
+        <path d="M16 17H8"></path>
+      </symbol>
+      <!-- send button, P1-18 -->
+      <symbol id="lc-arrow-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m5 12 7-7 7 7"></path>
+        <path d="M12 19V5"></path>
+      </symbol>
+      <!-- sidebar fold, top bar left (VF5) -->
+      <symbol id="lc-panel-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+        <path d="M9 3v18"></path>
+      </symbol>
+      <!-- header toggle, P1-11 -->
+      <symbol id="lc-panel-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+        <path d="M15 3v18"></path>
+      </symbol>
+      <!-- priority+ header toolbar (lucide-static 1.69.0): the four tool icons, the « ⋯ » menu and the Claude AI tab -->
+      <symbol id="lc-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 19v3"></path>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+        <rect x="9" y="2" width="6" height="13" rx="3"></rect>
+      </symbol>
+      <symbol id="lc-messages-square" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path>
+        <path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"></path>
+      </symbol>
+      <symbol id="lc-plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22v-5"></path>
+        <path d="M15 8V2"></path>
+        <path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z"></path>
+        <path d="M9 8V2"></path>
+      </symbol>
+      <symbol id="lc-ellipsis" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="1"></circle>
+        <circle cx="19" cy="12" r="1"></circle>
+        <circle cx="5" cy="12" r="1"></circle>
+      </symbol>
+      <symbol id="lc-sparkles" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"></path>
+        <path d="M20 2v4"></path>
+        <path d="M22 4h-4"></path>
+        <circle cx="4" cy="20" r="2"></circle>
+      </symbol>
+      <!-- Goal chip, P1-18 -->
+      <symbol id="lc-target" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <circle cx="12" cy="12" r="6"></circle>
+        <circle cx="12" cy="12" r="2"></circle>
+      </symbol>
+      <!-- Clear chip, P1-18 -->
+      <symbol id="lc-eraser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 21H8a2 2 0 0 1-1.42-.587l-3.994-3.999a2 2 0 0 1 0-2.828l10-10a2 2 0 0 1 2.829 0l5.999 6a2 2 0 0 1 0 2.828L12.834 21"></path>
+        <path d="m5.082 11.09 8.828 8.828"></path>
+      </symbol>
+      <!-- chat activity strip, B8: thinking -->
+      <symbol id="lc-brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 18V5"></path>
+        <path d="M15 13a4.17 4.17 0 01-3-4 4.17 4.17 0 01-3 4"></path>
+        <path d="M17.707 6.294A3 3 0 1012 5a3 3 0 10-5.707 1.294"></path>
+        <path d="M17.996 5.125a4 4 0 012.526 5.77"></path>
+        <path d="M18 18a4 4 0 002-7.465"></path>
+        <path d="M19.967 17.482a4 4 0 11-7.967.517 4 4 0 11-7.967-.517"></path>
+        <path d="M6 18a4 4 0 01-2-7.465"></path>
+        <path d="M6.004 5.125a4 4 0 00-2.526 5.77"></path>
+      </symbol>
+      <!-- chat activity strip, B8: a tool is running -->
+      <symbol id="lc-hammer" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="m15 12-9.373 9.373a1 1 0 0 1-3.001-3L12 9"></path>
+        <path d="m18 15 4-4"></path>
+        <path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172v-.344a2 2 0 0 0-.586-1.414l-1.657-1.657A6 6 0 0 0 12.516 3H9l1.243 1.243A6 6 0 0 1 12 8.485V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5"></path>
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- xterm UMD builds: expose window.Terminal / window.FitAddon (no bundler needed) -->
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
+  <script src="../node_modules/diff2html/bundles/js/diff2html.min.js"></script>
+  <!-- v40: markdown renderer for the plans panel (UMD -> window.markdownit). -->
+  <script src="../node_modules/markdown-it/dist/markdown-it.min.js"></script>
+  <!-- Native ES modules (no bundler): boot.js wires everything and exposes
+       the probe seam. Module scripts are deferred -> they run after the UMD
+       classics above, whatever their position. -->
+  <script type="module" src="js/boot.js"></script>
+  <!-- Room panel: self-initializing module (no boot.js wiring) so the
+       inter-session chat stays a fully isolated, removable feature. -->
+  <script type="module" src="js/room-panel.js"></script>
+  <!-- Room control: same isolated pattern — turns `room spawn`/`resume`
+       lifecycle records into pane actions (openPane), no boot.js coupling. -->
+  <script type="module" src="js/room-control.js"></script>
+  <!-- Report full screen (S10): self-wiring like the weather strip — it reads the DOM of the Plugins panel and listens for its
+       Escape request; plugin-panel.js imports nothing from it. -->
+  <script type="module" src="js/plugin-full.js"></script>
+  <!-- HTML plan full screen: the same control for the Plans tab (view-full.js), self-wiring on #plans-panel / #pp-view / #pp-full. -->
+  <script type="module" src="js/plans-full.js"></script>
+  <!-- HTML page full screen of the Files tab: the same control (view-full.js), self-wiring on #files-panel / #fp-vbody / #fp-full. -->
+  <script type="module" src="js/files-full.js"></script>
+</body>
+</html>

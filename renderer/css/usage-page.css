@@ -1,0 +1,443 @@
+/* Usage page (#usage-page): cost, tokens and limits overlay, on the deck tokens.
+   Same layout as before; the look is the deck's: the ground surface, hairlines in place of boxed
+   cards, underlined tabs, light tabular figures. Every rule is scoped under the id; the chart paint
+   is final in usage-chart.js (inline styles), so no .uc-* rule here.
+   Colour: --m-1..4 carry the measures (token types, models), never state.
+   Motion: opacity / transform only; the page enters on --dur-drawer and leaves on --dur-pop
+   (exitThen in usage-page.js); colour fades use --dur-color. */
+
+/* --- Shell ---------------------------------------------------------------- */
+#usage-page {
+  --up-alert: var(--s-bad);
+  position: absolute;
+  inset: 0;
+  z-index: 40; /* band of #git-panel / #plans-panel; the three never coexist */
+  display: flex;
+  flex-direction: column;
+  background: var(--ground);
+  color: var(--ink);
+  font-size: 13px;
+  outline: none;
+  opacity: 0;
+  transform: translateY(8px);
+}
+#usage-page[hidden] { display: none; }
+/* The transition sits on .open only: the page glides in on --dur-drawer, and its close is the
+   exitThen animation of usage-page.js (--dur-pop), with no CSS transition running beside it. */
+#usage-page.open {
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--dur-drawer) var(--ease-out), transform var(--dur-drawer) var(--ease-out);
+}
+
+/* --- Header: underlined tabs, segmented periods, actions ------------------ */
+#usage-page .up-head {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  height: 52px;
+  padding: 0 16px 0 24px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--rule);
+}
+#usage-page .up-tabs { display: flex; gap: 20px; align-self: stretch; }
+#usage-page .up-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px; /* the underline sits on the header hairline */
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-color) var(--ease-out), border-color var(--dur-color) var(--ease-out);
+}
+#usage-page .up-btn-label { white-space: nowrap; }
+#usage-page .up-tab svg { width: 16px; height: 16px; flex: none; }
+#usage-page .up-tab:hover { color: var(--ink-2); }
+#usage-page .up-tab.active { color: var(--ink); border-bottom-color: var(--ink-2); }
+
+#usage-page .up-periods,
+#usage-page .up-plan-opts {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--lift);
+}
+#usage-page .up-periods {
+  margin-left: auto;
+  transition: opacity var(--dur-color) var(--ease-out);
+}
+#usage-page .up-periods[data-idle="true"] { opacity: 0.4; } /* « Limites »: space stays reserved */
+#usage-page .up-period,
+#usage-page .up-plan-opt {
+  height: 24px;
+  min-width: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-color) var(--ease-out), background-color var(--dur-color) var(--ease-out);
+}
+#usage-page .up-period:hover:not(:disabled),
+#usage-page .up-plan-opt:hover { color: var(--ink-2); }
+#usage-page .up-period:disabled { cursor: default; }
+#usage-page .up-period.active,
+#usage-page .up-plan-opt.active { color: var(--ink); background: var(--lift-2); }
+
+#usage-page .up-actions { display: flex; gap: 4px; }
+#usage-page .up-refresh,
+#usage-page .up-close {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color var(--dur-color) var(--ease-out), background-color var(--dur-color) var(--ease-out);
+}
+#usage-page .up-refresh svg,
+#usage-page .up-close svg { width: 16px; height: 16px; }
+#usage-page .up-refresh:hover:not(:disabled),
+#usage-page .up-close:hover { color: var(--ink); background: var(--lift); }
+#usage-page .up-refresh:disabled { cursor: progress; }
+/* The icon's rotation is `spinWhile` of motion.js (whole turns); the class only tints the button while it reloads. */
+#usage-page .up-refresh.is-spinning { color: var(--m-1); }
+
+/* --- Body: one scroll area, a centred column ------------------------------- */
+#usage-page .up-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable; /* no layout shift when a tab is taller than the window */
+  padding: 36px 40px 40px;
+}
+#usage-page .up-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+}
+/* Refresh: the shown figures dim (delayed, so a quick refetch never flickers). */
+#usage-page .up-report,
+#usage-page .up-limits { transition: opacity var(--dur-color) var(--ease-out); }
+#usage-page.is-refreshing .up-report[data-state="ready"],
+#usage-page.is-refreshing .up-limits[data-state="ready"] {
+  opacity: 0.4;
+  transition-delay: 150ms;
+}
+#usage-page .up-report[data-state="error"] .up-empty {
+  padding: 56px 0;
+  text-align: center;
+  color: var(--s-wait);
+}
+#usage-page .up-empty { padding: 4px 0; color: var(--ink-3); font-size: 13px; }
+
+/* --- Hero ------------------------------------------------------------------ */
+#usage-page .up-hero { display: flex; flex-direction: column; gap: 8px; }
+#usage-page .up-hero-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+#usage-page .up-hero-value {
+  font-size: 46px;
+  line-height: 1;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+#usage-page .up-hero-unit { font-size: 15px; color: var(--ink-2); }
+#usage-page .up-prov,
+#usage-page .up-hero-sub { font-size: 13px; color: var(--ink-3); }
+/* A tag is a coloured word, never a capsule. */
+#usage-page .up-unpriced {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--s-wait);
+  font-size: 12px;
+}
+
+/* --- Chart host (the SVG itself is painted by usage-chart.js) -------------- */
+#usage-page .up-chart {
+  min-height: 238px; /* 220 viewBox + padding + hairlines: same height as its skeleton */
+  padding: 12px 0 4px; /* no side padding: the chart measures clientWidth */
+  border: 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+  background: none;
+}
+#usage-page .up-chart[data-state="error"] { display: none; }
+
+/* --- Totals strip ---------------------------------------------------------- */
+#usage-page .up-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0;
+  border-bottom: 1px solid var(--rule);
+}
+#usage-page .up-total {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px 0 14px 18px;
+  border: 0;
+  border-left: 1px solid var(--rule);
+  border-radius: 0;
+  background: none;
+}
+#usage-page .up-total:first-child { padding-left: 0; border-left: 0; }
+#usage-page .up-total-label { display: flex; align-items: center; font-size: 12px; color: var(--ink-3); }
+#usage-page .up-total-value { font-size: 20px; font-weight: 400; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+
+/* Measure swatch: the colour comes from --sw, set by usage-page.js (a --m-N token). */
+#usage-page .up-sw {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 2px;
+  background: var(--sw, var(--ink-3));
+}
+
+/* --- Share bars ------------------------------------------------------------ */
+#usage-page .up-shares {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px 40px;
+}
+#usage-page .up-share-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+#usage-page .up-share-title { margin-bottom: 8px; font-size: 13px; font-weight: 500; color: var(--ink); }
+#usage-page .up-share {
+  display: grid;
+  grid-template-columns: minmax(96px, 150px) minmax(60px, 1fr) auto 48px;
+  align-items: center;
+  gap: 16px;
+  padding: 7px 0;
+  border-top: 1px solid var(--rule);
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+#usage-page .up-share-label { display: flex; align-items: center; min-width: 0; }
+#usage-page .up-share-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#usage-page .up-bar,
+#usage-page .up-meter { overflow: hidden; border-radius: 3px; background: var(--rule-2); }
+#usage-page .up-bar { height: 6px; }
+#usage-page .up-bar-fill,
+#usage-page .up-meter-fill {
+  height: 100%;
+  width: calc(var(--p, 0) * 100%); /* --p is a 0..1 fraction set by usage-page.js */
+  border-radius: inherit;
+}
+#usage-page .up-bar-fill { background: var(--sw, var(--ink-3)); }
+#usage-page .up-share-value { text-align: right; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+#usage-page .up-share-pct { text-align: right; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+/* --- Breakdown table (Modèle | Jour) ---------------------------------------- */
+#usage-page .up-breakdown { overflow: visible; border: 0; border-radius: 0; background: none; }
+#usage-page .up-breakdown-head {
+  display: flex;
+  gap: 20px;
+  width: auto;
+  margin: 0 0 4px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  border-radius: 0;
+  background: none;
+}
+#usage-page .up-seg {
+  height: auto;
+  min-width: 0;
+  padding: 8px 0 9px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-color) var(--ease-out), border-color var(--dur-color) var(--ease-out);
+}
+#usage-page .up-seg:hover { color: var(--ink-2); }
+#usage-page .up-seg.active { color: var(--ink); border-bottom-color: var(--ink-2); }
+#usage-page .up-rows > .up-empty { padding: 16px 0; }
+#usage-page .up-row-wrap { border-bottom: 1px solid var(--rule); }
+#usage-page .up-row-day { border-bottom: 1px solid var(--rule); }
+#usage-page .up-row {
+  display: grid;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 11px 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+#usage-page .up-row-model {
+  grid-template-columns: 16px minmax(0, 1fr) auto 52px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 11px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-color) var(--ease-out);
+}
+#usage-page .up-row-model:hover,
+#usage-page .up-row-model[aria-expanded="true"] { background: var(--lift); }
+#usage-page .up-row-model:focus-visible { outline-offset: -2px; }
+#usage-page .up-row-model svg { width: 16px; height: 16px; color: var(--sw, var(--ink-3)); }
+#usage-page .up-row-model .up-row-name { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); }
+#usage-page .up-row-model[data-unpriced="true"] .up-row-value { color: var(--ink-3); }
+#usage-page .up-row-day { grid-template-columns: minmax(0, 1fr) auto 52px; }
+#usage-page .up-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#usage-page .up-row-value { text-align: right; font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
+#usage-page .up-row-pct { text-align: right; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+#usage-page .up-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px 24px;
+  padding: 4px 0 14px 30px;
+  background: none;
+  font-size: 12.5px;
+}
+#usage-page .up-detail-line { display: flex; justify-content: space-between; gap: 12px; }
+#usage-page .up-detail-label { color: var(--ink-3); }
+#usage-page .up-detail-value { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+#usage-page .up-detail-projects {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+}
+#usage-page .up-detail-list { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--ink-3); }
+#usage-page .up-chip {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* --- « Limites » ------------------------------------------------------------ */
+#usage-page .up-limits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 0 40px;
+}
+#usage-page .up-limits[data-state="loading"] .up-limit { opacity: 0.6; }
+/* The refresh bar overlays the top edge, so it takes no grid cell. */
+#usage-page .up-limits { position: relative; }
+#usage-page .up-limits > .mr-progress { position: absolute; inset: 0 0 auto 0; }
+#usage-page .up-limit {
+  --up-level: var(--m-1);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 20px 0;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  border-radius: 0;
+  background: none;
+}
+#usage-page .up-limit[data-level="warm"] { --up-level: var(--s-wait); }
+#usage-page .up-limit[data-level="alert"] { --up-level: var(--up-alert); }
+#usage-page .up-limit[data-level="none"] { --up-level: var(--ink-3); }
+#usage-page .up-limit-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+#usage-page .up-limit-title { font-size: 13px; font-weight: 500; }
+#usage-page .up-limit-src { font-size: 12px; color: var(--ink-3); text-align: right; }
+#usage-page .up-limit-main { display: flex; align-items: baseline; gap: 8px; }
+#usage-page .up-limit-left {
+  font-size: 46px;
+  line-height: 1;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+#usage-page .up-limit[data-level="warm"] .up-limit-left,
+#usage-page .up-limit[data-level="alert"] .up-limit-left { color: var(--up-level); }
+#usage-page .up-limit[data-level="none"] .up-limit-left { color: var(--ink-3); }
+#usage-page .up-limit-cap { font-size: 13px; color: var(--ink-3); }
+#usage-page .up-meter { height: 4px; }
+#usage-page .up-meter-fill { background: var(--up-level); }
+#usage-page .up-limit-reset { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12.5px; }
+#usage-page .up-limit-reset svg { width: 14px; height: 14px; flex: none; color: var(--ink-3); }
+#usage-page .up-limit-count { font-weight: 500; font-variant-numeric: tabular-nums; }
+#usage-page .up-limit-at { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+#usage-page .up-limit-note { min-height: 16px; font-size: 12px; color: var(--ink-3); }
+/* Plan choice: label, options (the period control's look, see above) and a neutral tag, on one row across the grid. */
+#usage-page .up-plan {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+#usage-page .up-plan-opt { white-space: nowrap; }
+#usage-page .up-plan-label,
+#usage-page .up-limit-plan { font-size: 12px; color: var(--ink-3); }
+#usage-page .up-plan-tag {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+/* --- Skeleton (loading) ----------------------------------------------------- */
+#usage-page .up-skel {
+  border-radius: 8px;
+  background: var(--lift-2);
+}
+#usage-page .up-skel-hero { width: 260px; max-width: 100%; height: 64px; }
+#usage-page .up-skel-chart { height: 238px; }
+#usage-page .up-skel-strip { height: 68px; }
+#usage-page .up-skel-bars { height: 150px; }
+
+@media (prefers-reduced-motion: reduce) {
+  #usage-page, #usage-page * { animation: none !important; transition: none !important; }
+  #usage-page .up-skel { opacity: 0.7; }
+}

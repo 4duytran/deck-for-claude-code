@@ -1,0 +1,128 @@
+/* Token layer (night-workshop direction: colour says one state only). Custom-property
+   names and font faces, no other selector. style.css aliases its legacy tokens onto
+   these names, and the legacy --c-* below are re-pointed onto the new values, so
+   linking this file restyles the UI. Linked BEFORE style.css. Terminal stack stays
+   theme.js MONO_FONT. */
+
+/* IBM Plex ships in vendor/ibm-plex (OFL). A missing file must never break the UI:
+   swap keeps text visible and the --font-ui / --font-mono lists fall through to the
+   system stacks. */
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+  src: url("../../vendor/ibm-plex/IBM Plex Sans Var-Roman.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../../vendor/ibm-plex/IBMPlexMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../../vendor/ibm-plex/IBMPlexMono-Medium.woff2") format("woff2");
+}
+
+/* Inter stays declared: the code-ask answer bubble (`.ca-bubble` in style.css) keeps the
+   pre-restyle font. Same no-break rules: swap, then an installed Inter, then the system stack. */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../../vendor/inter/InterVariable.woff2") format("woff2"),
+       local("Inter");
+}
+
+:root {
+  /* Ground and surfaces */
+  --ground: #0B0E13;      /* app background: the content lives on it */
+  --dock: #0E1218;        /* sidebar and composer, one step above */
+  --well: #080A0E;        /* code and tool output */
+  --lift: rgba(232, 236, 242, 0.035);   /* hover, chosen row */
+  --lift-2: rgba(232, 236, 242, 0.06);
+  --rule: rgba(232, 236, 242, 0.06);    /* 1 px hairline */
+  --rule-2: rgba(232, 236, 242, 0.11);
+  --ring: rgba(232, 236, 242, 0.20);
+  --surface-input: #10141A;             /* composer « Calme » frame (inset hairline in style.css) */
+  --surface-input-focus: #12171E;
+  --surface-band: #10141A;              /* user turn band: one step above --ground */
+  --surface-pop: #12161D;               /* menus, chart tooltip */
+
+  /* Ink scale */
+  --ink: #E6E9EE;
+  --ink-2: #A7AEB9;
+  --ink-3: #6E7682;
+  --ink-4: #474E59;
+
+  /* States: muted, never neon, never a fill */
+  --s-run: #86B5A2;       /* working: sage */
+  --s-wait: #D2A462;      /* waiting for an answer: lamp amber */
+  --s-idle: #7F98B5;      /* at rest (idle / active): slate blue, apart from a closed session's grey outline */
+  --s-agent: #A49CCB;     /* sub-agent: grey lavender */
+  --s-bad: #C98676;       /* failed, interrupted: rust */
+  --s-ok: #8FA89A;        /* done: dull green */
+  --s-add: #93B58E;
+  --s-del: #C98676;
+
+  /* Measures: charts and gauges, fixed order */
+  --m-1: #5EEAD4;
+  --m-2: #D9773F;
+  --m-3: #22A884;
+  --m-4: #A86FE0;
+
+  /* Fonts (style.css :root repeats these two so a fixture copying only that block keeps them) */
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  /* Legacy names, re-pointed onto the values above so every rule reading them follows */
+  --c-page: var(--ground);
+  --c-tint-teal: rgba(94, 234, 212, 0.10);
+  --c-tint-indigo: rgba(129, 140, 248, 0.13);
+  --c-panel: rgba(255, 255, 255, 0.03);
+  --c-panel-2: rgba(255, 255, 255, 0.05);
+  --c-pane-glass: rgba(255, 255, 255, 0.03); /* .pane: translucent, the app glows show through */
+  --c-hairline: rgba(255, 255, 255, 0.08);
+  --c-hairline-strong: rgba(255, 255, 255, 0.10);
+
+  /* Text and state colours */
+  --c-text: var(--ink);
+  --c-muted: var(--ink-2);
+  --c-accent: #5EEAD4; /* = --m-1 */
+  --c-on-accent: #06201C;
+  --c-waiting: var(--s-wait);
+  --c-ok: var(--s-ok);
+  --c-agent: var(--s-agent); /* running sub-agent dot (sidebar): lavender, distinct from the session dot */
+  --c-indigo: #A5B4FC; /* git log: trunk-only and incoming lanes, dots and chips */
+  --c-del: #FCA5A5; /* git log: deleted-line counts (the --dv-* diff colours are #gp-diff only) */
+
+  /* Radii */
+  --r-1: 10px;
+  --r-2: 12px;
+  --r-3: 14px;
+  --r-4: 18px;
+
+  /* Shadows (--shadow-menu and --shadow-dialog live in style.css) */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.35);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.45);
+
+  /* Glass: allowlisted large static surfaces only (never a drawer, a menu
+     that animates, a pane body or xterm). */
+  --glass-blur: blur(20px) saturate(140%);
+
+  /* Motion: compositor-only properties (opacity, transform) */
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-color: 150ms;
+  --dur-height: 220ms;
+  --dur-drawer: 280ms;
+  --dur-pop: 200ms;
+  --dur-exit: 150ms; /* close of the header and composer « ⋯ » menus */
+  --ease-pop: cubic-bezier(0.32, 0.72, 0, 1);
+}

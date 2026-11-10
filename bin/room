@@ -1,0 +1,577 @@
+#!/usr/bin/env node
+// claude-deck — room CLI: post/read inter-session messages. SHIPPED WITH THE
+// DECK; the deck appends this bin/ to every session's PATH so `room` is
+// callable from a session's Bash with zero user setup. Builtins only (no deps)
+// so it runs the instant a session is spawned.
+//
+//   room send --to <label|session_id|*> <message...>   append one message
+//   room inbox [-n N]                                   messages addressed to me
+//   room tail  [-n N]                                   recent room activity
+//   room who                                            live sessions (registry)
+//   room sessions [--summary <id>]                      all sidebar sessions (live+idle) + per-session summary
+//   room whoami                                         my session id + label
+//   room lead [--status|--release]                      claim / show / release the exclusive lead role (one at a time)
+//   room spawn --name <name> [--cwd <dir>]              ask the deck to OPEN a new named session
+//   room resume <session_id>                            ask the deck to REOPEN an existing session
+//
+// spawn/resume post a {type:'control'} record the deck router forwards to the
+// renderer (it owns pane creation) — a "lead" session can thus orchestrate
+// worker sessions, then delegate via `room send`.
+//
+// Identity: the deck exports ROOM_SESSION_ID + ROOM_LABEL into each session's
+// env at spawn. Run OUTSIDE a deck session (e.g. the human in a plain shell)
+// it self-identifies as the human (from=user, label=you); override with
+// --from / --label.
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+
+// Mirrors config.js: env-overridable so the CLI and the deck router agree on
+// the room location even under the probe seam (production: neither sets it).
+const ROOMS_DIR = process.env.CLAUDE_DECK_ROOMS_DIR
+  || path.join(os.homedir(), '.claude', 'rooms');
+const REGISTRY_FILE = path.join(ROOMS_DIR, 'registry.json');
+// Full live+idle session snapshot (deck-written from the sidebar scan) + the
+// projects root, for `room sessions` and its `--summary` tail-read. Mirror
+// config.js's env override so the CLI and deck agree under the probe seam.
+const SESSIONS_FILE = path.join(ROOMS_DIR, 'sessions.json');
+const PROJECTS_DIR = process.env.CLAUDE_DECK_PROJECTS_DIR
+  || path.join(os.homedir(), '.claude', 'projects');
+// Single-lead lock (mirrors config.js path). `{session_id,label,claimed_at}`.
+const LEAD_FILE = path.join(ROOMS_DIR, 'lead.json');
+const DEFAULT_ROOM = 'main';
+
+const SELF_ID = process.env.ROOM_SESSION_ID || null;
+const SELF_LABEL = process.env.ROOM_LABEL || null;
+// Human display name for room provenance ([Room - <name>]). Same env var as the
+// deck's config.js so the human shows up consistently from CLI and panel.
+const HUMAN_LABEL = process.env.CLAUDE_DECK_ROOM_HUMAN || (() => {
+  try { return os.userInfo().username; } catch (_) { return ''; } // no passwd entry
+})() || 'human';
+
+const shortId = (id) => (typeof id === 'string' ? id.slice(0, 8) : '?');
+
+function roomFile(room) {
+  const name = /^[a-zA-Z0-9._-]+$/.test(room || '') ? room : DEFAULT_ROOM;
+  return path.join(ROOMS_DIR, `${name}.jsonl`);
+}
+
+function readLines(file) {
+  let raw;
+  try { raw = fs.readFileSync(file, 'utf8'); } catch (_) { return []; }
+  const out = [];
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    try { out.push(JSON.parse(t)); } catch (_) { /* skip malformed */ }
+  }
+  return out;
+}
+
+function fmtTime(ts) {
+  if (typeof ts !== 'string') return '--:--:--';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '--:--:--';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function fmtMsg(m) {
+  const who = m.from_label || shortId(m.from);
+  return `[${fmtTime(m.ts)}] ${who} → ${m.to}: ${m.text}`;
+}
+
+// Minimal flag parser: pulls --to/--from/--label/--room/-n, everything else
+// becomes positional words (the message).
+function parseArgs(argv) {
+  const flags = {};
+  const rest = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--to') { flags.to = argv[++i]; }
+    else if (a === '--from') { flags.from = argv[++i]; }
+    else if (a === '--label') { flags.label = argv[++i]; }
+    else if (a === '--room') { flags.room = argv[++i]; }
+    else if (a === '--name') { flags.name = argv[++i]; }
+    else if (a === '--cwd') { flags.cwd = argv[++i]; }
+    else if (a === '--summary') {
+      const nx = argv[i + 1];
+      if (nx !== undefined && !nx.startsWith('--')) { flags.summary = argv[++i]; }
+      else { flags.summary = true; }
+    }
+    else if (a === '--status' || a === '--release' || a === '--claim') { flags[a.slice(2)] = true; }
+    else if (a === '-n' || a === '--limit') { flags.n = parseInt(argv[++i], 10); }
+    else rest.push(a);
+  }
+  flags._ = rest;
+  return flags;
+}
+
+function identity(flags) {
+  if (SELF_ID) {
+    return { from: flags.from || SELF_ID, from_label: flags.label || SELF_LABEL || shortId(SELF_ID), isHuman: false };
+  }
+  return { from: flags.from || 'user', from_label: flags.label || HUMAN_LABEL, isHuman: true };
+}
+
+function cmdSend(flags) {
+  const to = flags.to;
+  const text = flags._.join(' ').trim();
+  if (!to || !text) {
+    process.stderr.write('usage: room send --to <label|session_id|*> <message...>\n');
+    process.exit(2);
+  }
+  const me = identity(flags);
+  const msg = {
+    id: crypto.randomUUID(),
+    ts: new Date().toISOString(),
+    from: me.from,
+    from_label: me.from_label,
+    to,
+    text,
+  };
+  try {
+    fs.mkdirSync(ROOMS_DIR, { recursive: true });
+    fs.appendFileSync(roomFile(flags.room), `${JSON.stringify(msg)}\n`);
+  } catch (err) {
+    process.stderr.write(`room: write failed: ${err.message}\n`);
+    process.exit(1);
+  }
+  if (me.isHuman && !SELF_ID && !flags.from) {
+    process.stderr.write(`room: no ROOM_SESSION_ID in env — sent as human (${HUMAN_LABEL}). Use --from to override.\n`);
+  }
+  process.stdout.write(`sent → ${to}: ${text}\n`);
+}
+
+function cmdWhoami() {
+  if (SELF_ID) {
+    process.stdout.write(`session_id: ${SELF_ID}\nlabel:      ${SELF_LABEL || shortId(SELF_ID)}\n`);
+  } else {
+    process.stdout.write(`identity:   human (${HUMAN_LABEL}) — not inside a deck session\n`);
+  }
+}
+
+function cmdWho() {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')); } catch (_) { data = null; }
+  const sessions = (data && Array.isArray(data.sessions)) ? data.sessions : [];
+  if (!sessions.length) {
+    process.stdout.write('no live sessions (is the deck running?)\n');
+    return;
+  }
+  process.stdout.write(`${sessions.length} live session(s):\n`);
+  for (const s of sessions) {
+    const mark = s.session_id === SELF_ID ? '*' : ' ';
+    const label = (s.label || shortId(s.session_id)).padEnd(20);
+    // FULL id (not shortId): it is the precise handle for `room resume <id>`
+    // and an unambiguous `room send --to <id>`.
+    process.stdout.write(`${mark} ${label} ${s.session_id}  ${s.cwd || ''}\n`);
+  }
+}
+
+function cmdTail(flags) {
+  const n = Number.isInteger(flags.n) && flags.n > 0 ? flags.n : 20;
+  const msgs = readLines(roomFile(flags.room)).slice(-n);
+  if (!msgs.length) { process.stdout.write('(room is empty)\n'); return; }
+  for (const m of msgs) process.stdout.write(`${fmtMsg(m)}\n`);
+}
+
+function cmdInbox(flags) {
+  const n = Number.isInteger(flags.n) && flags.n > 0 ? flags.n : 20;
+  const idLc = SELF_ID ? SELF_ID.toLowerCase() : null;
+  const labelLc = (SELF_LABEL || '').toLowerCase();
+  const mine = readLines(roomFile(flags.room)).filter((m) => {
+    if (m.from === SELF_ID) return false; // not my own posts
+    const to = String(m.to || '').toLowerCase();
+    return to === '*' || (idLc && to === idLc) || (labelLc && to === labelLc);
+  }).slice(-n);
+  if (!mine.length) { process.stdout.write('(inbox empty)\n'); return; }
+  for (const m of mine) process.stdout.write(`${fmtMsg(m)}\n`);
+}
+
+// Session-lifecycle control: the CLI can only WRITE — the deck owns pane
+// creation (renderer). A {type:'control'} record is forwarded by the router to
+// the renderer, which calls the SAME openPane path as the '+' button / sidebar
+// resume (single-pane policy enforced there). The new session registers at
+// spawn, so `room who` shows it (+ its id) right after.
+// --------------------------------------------------------------------------
+// Single-lead lock. Only one session may hold the "lead" role at a time. The
+// lock (LEAD_FILE) names the lead's session_id and is ACTIVE only while that
+// session is live (present in the registry) — a dead lead's lock is stale, so
+// any session may take it over. The lead-only lifecycle commands (spawn/resume)
+// claim-or-require the lock; a rival session is refused (exit 3). The deck
+// re-checks this server-side (handleControl) so a direct main.jsonl write can't
+// bypass it. The human (no ROOM_SESSION_ID) is never gated — they orchestrate
+// via the deck UI and always outrank a session.
+// --------------------------------------------------------------------------
+function readLead() {
+  try { return JSON.parse(fs.readFileSync(LEAD_FILE, 'utf8')); } catch (_) { return null; }
+}
+
+function writeLead(meId, meLabel) {
+  const payload = `${JSON.stringify({ session_id: meId, label: meLabel || shortId(meId), claimed_at: new Date().toISOString() }, null, 2)}\n`;
+  fs.mkdirSync(ROOMS_DIR, { recursive: true });
+  const tmp = `${LEAD_FILE}.tmp`;
+  fs.writeFileSync(tmp, payload);
+  fs.renameSync(tmp, LEAD_FILE);
+}
+
+// The CURRENT lead, honouring liveness: the lock only if its session is still
+// live; a stale lock (dead lead) resolves to null (reclaimable).
+function liveLead(liveReg = liveSet()) {
+  const lock = readLead();
+  if (!lock || !lock.session_id) return null;
+  return liveReg.has(lock.session_id) ? lock : null;
+}
+
+// Claim the lead role for `me`. Succeeds if there is no live lead, I already
+// hold it, or the existing lock is stale; refuses ({ok:false,lead}) only if a
+// DIFFERENT session currently holds a LIVE lead. The deck is the real arbiter
+// of a same-instant race — it honours only the live lead's control records.
+function claimLead(meId, meLabel) {
+  const liveReg = liveSet();
+  const lock = readLead();
+  const leadLive = !!(lock && lock.session_id && liveReg.has(lock.session_id));
+  if (leadLive && lock.session_id !== meId) return { ok: false, lead: lock };
+  const reaffirmed = !!(lock && lock.session_id === meId);
+  const tookOver = !!(lock && !leadLive && lock.session_id !== meId);
+  writeLead(meId, meLabel);
+  return { ok: true, tookOver, reaffirmed };
+}
+
+// Gate for the lead-only lifecycle commands. A session must hold (or be free to
+// claim) the lock; else it is refused with the current lead named (exit 3). A
+// no-SELF_ID caller (human / env-unset) is allowed ONLY when no lead is live
+// (bootstrap) and refused otherwise, mirroring the deck's from:'user' rejection.
+function requireLead(action) {
+  if (!SELF_ID) {
+    // Human / env-unset CLI (from:'user'). The deck rejects a from:'user' control
+    // whenever a lead is live (it cannot tell a human from an env-unset rival),
+    // so gate HERE with clear guidance instead of an optimistic no-op (F3). The
+    // human's real path is the deck '+' button, which is unaffected by the lock.
+    const lead = liveLead();
+    if (lead) {
+      process.stderr.write(
+        `room: ${action} not honored while a lead is active (${lead.label || shortId(lead.session_id)}). `
+        + "Use the deck '+' button, or run `room lead --release` from the lead first.\n",
+      );
+      process.exit(3);
+    }
+    return; // no live lead -> bootstrap allowed
+  }
+  const res = claimLead(SELF_ID, SELF_LABEL);
+  if (!res.ok) {
+    process.stderr.write(
+      `room: ${action} refused — a lead is already active: `
+      + `${res.lead.label || shortId(res.lead.session_id)} (${shortId(res.lead.session_id)}). `
+      + 'Only one lead at a time. Ask the human to reassign, or wait for that lead to close.\n',
+    );
+    process.exit(3);
+  }
+}
+
+function cmdLead(flags) {
+  if (flags.status) {
+    const lead = liveLead();
+    if (!lead) {
+      const stale = readLead();
+      process.stdout.write(stale
+        ? `no active lead (stale lock from ${shortId(stale.session_id)} — reclaimable)\n`
+        : 'no active lead\n');
+      return undefined;
+    }
+    const mine = SELF_ID && lead.session_id === SELF_ID ? '  (you)' : '';
+    process.stdout.write(`lead: ${lead.label || shortId(lead.session_id)} ${lead.session_id}${mine}\n`);
+    return undefined;
+  }
+  if (flags.release) {
+    const lead = liveLead();
+    if (lead && SELF_ID && lead.session_id !== SELF_ID) {
+      process.stderr.write(`room: not the lead — held by ${shortId(lead.session_id)}; cannot release\n`);
+      process.exit(3);
+    }
+    try { fs.unlinkSync(LEAD_FILE); } catch (_) { /* already gone */ }
+    process.stdout.write('lead role released\n');
+    return undefined;
+  }
+  // default / --claim: take the lead.
+  if (!SELF_ID) {
+    process.stdout.write('lead role is for deck sessions; you (human) orchestrate via the deck UI\n');
+    return undefined;
+  }
+  const res = claimLead(SELF_ID, SELF_LABEL);
+  if (!res.ok) {
+    process.stderr.write(
+      `room: a lead is already active: ${res.lead.label || shortId(res.lead.session_id)} `
+      + `(${shortId(res.lead.session_id)}). Only one lead at a time.\n`,
+    );
+    process.exit(3);
+  }
+  const how = res.reaffirmed ? ' (already yours)' : res.tookOver ? ' (took over a stale lock)' : '';
+  process.stdout.write(`you are now the lead${how}\nspawn workers: room spawn --name <n> [--cwd <d>]\n`);
+  return undefined;
+}
+
+function cmdSpawn(flags) {
+  const name = (flags.name || flags._.join(' ')).trim();
+  if (!name) {
+    process.stderr.write('usage: room spawn --name <session-name> [--cwd <dir>]\n');
+    process.exit(2);
+  }
+  requireLead('spawn'); // single-lead gate: claim if free, refuse (exit 3) if a rival lead is live
+  const me = identity(flags);
+  const rec = {
+    id: crypto.randomUUID(),
+    ts: new Date().toISOString(),
+    type: 'control',
+    action: 'spawn',
+    name: name.slice(0, 200),
+    // Resolve --cwd against the LEAD's cwd so a relative path is meaningful at
+    // the caller (the deck would otherwise resolve it against its own main
+    // process dir). No --cwd -> spawn where the lead currently is.
+    cwd: flags.cwd ? path.resolve(flags.cwd) : process.cwd(),
+    from: me.from,
+    from_label: me.from_label,
+    to: 'deck',
+    text: `spawn "${name}"`,
+  };
+  try {
+    fs.mkdirSync(ROOMS_DIR, { recursive: true });
+    fs.appendFileSync(roomFile(flags.room), `${JSON.stringify(rec)}\n`);
+  } catch (err) {
+    process.stderr.write(`room: write failed: ${err.message}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`requested spawn → "${name}" — run \`room who\` to get the new session id, then \`room send\`.\n`);
+}
+
+function cmdResume(flags) {
+  const id = (flags._[0] || flags.to || '').trim();
+  // Canonical session UUID only (same shape the deck router validates with —
+  // src/main/config.js UUID_RE). A loose match here would print success for an
+  // id the router then silently drops. A short id also can't be disambiguated
+  // against CLOSED sessions (absent from the live registry). Get it from `room who`.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    process.stderr.write('usage: room resume <session_id>   (full id — see `room who`)\n');
+    process.exit(2);
+  }
+  requireLead('resume'); // single-lead gate: claim if free, refuse (exit 3) if a rival lead is live
+  const me = identity(flags);
+  const rec = {
+    id: crypto.randomUUID(),
+    ts: new Date().toISOString(),
+    type: 'control',
+    action: 'resume',
+    session_id: id,
+    from: me.from,
+    from_label: me.from_label,
+    to: 'deck',
+    text: `resume ${shortId(id)}`,
+  };
+  try {
+    fs.mkdirSync(ROOMS_DIR, { recursive: true });
+    fs.appendFileSync(roomFile(flags.room), `${JSON.stringify(rec)}\n`);
+  } catch (err) {
+    process.stderr.write(`room: write failed: ${err.message}\n`);
+    process.exit(1);
+  }
+  process.stdout.write(`requested resume → ${shortId(id)} (the deck reopens the pane)\n`);
+}
+
+// --------------------------------------------------------------------------
+// `room sessions` — the lead's FULL session view (live + idle), sourced from
+// the deck's canonical sidebar snapshot (SESSIONS_FILE) so it never diverges
+// from the sidebar. Liveness = intersection with the live registry; idle =
+// snapshot-only. `--summary <id>` tail-reads a session's .jsonl for its last
+// assistant message; resume an idle one with `room resume <id>`.
+// --------------------------------------------------------------------------
+function liveSet() {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')); } catch (_) { data = null; }
+  const out = new Set();
+  if (data && Array.isArray(data.sessions)) {
+    for (const s of data.sessions) if (s && s.session_id) out.add(s.session_id);
+  }
+  return out;
+}
+
+// Liveness: trust the deck-computed `live` flag (canonical reconciled sidebar
+// status, resume-safe). Registry membership is only a fallback for a snapshot
+// written before the flag existed — and is WRONG for resumed sessions (registry
+// holds the original id, the snapshot the forked id), which is exactly why the
+// deck now ships the flag.
+function isLive(s, liveReg) {
+  return typeof s.live === 'boolean' ? s.live : liveReg.has(s.session_id);
+}
+
+function fmtAgo(ms) {
+  if (!ms) return '?';
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+function readSessionsSnapshot() {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf8')); } catch (_) { data = null; }
+  return (data && Array.isArray(data.sessions)) ? data.sessions : [];
+}
+
+// Resolve an id-ish arg to ONE snapshot row. Exact id wins outright; else
+// id-prefix, else label-substring. If a tier has ≥2 matches we REFUSE and
+// return the candidates rather than guess — mirroring the router's resolveTargets
+// invariant (ambiguous → bounce, never a wrong target): a wrong summary would
+// mislead the lead into resuming the WRONG session. Returns
+// { match, candidates }: match set = resolved; candidates.length>1 = ambiguous.
+function findSession(idArg) {
+  const q = String(idArg || '').trim().toLowerCase();
+  if (!q) return { match: null, candidates: [] };
+  const sessions = readSessionsSnapshot();
+  const exact = sessions.find((s) => s.session_id.toLowerCase() === q);
+  if (exact) return { match: exact, candidates: [] };
+  const byPrefix = sessions.filter((s) => s.session_id.toLowerCase().startsWith(q));
+  if (byPrefix.length === 1) return { match: byPrefix[0], candidates: [] };
+  if (byPrefix.length > 1) return { match: null, candidates: byPrefix };
+  const byLabel = sessions.filter((s) => (s.label || '').toLowerCase().includes(q));
+  if (byLabel.length === 1) return { match: byLabel[0], candidates: [] };
+  return { match: null, candidates: byLabel };
+}
+
+// Locate a session's .jsonl if the snapshot lacks/has a stale path: scan
+// ~/.claude/projects/*/<id>.jsonl.
+function globSessionFile(id) {
+  try {
+    for (const dir of fs.readdirSync(PROJECTS_DIR)) {
+      const f = path.join(PROJECTS_DIR, dir, `${id}.jsonl`);
+      if (fs.existsSync(f)) return f;
+    }
+  } catch (_) { /* no projects dir */ }
+  return null;
+}
+
+// Read up to the last maxBytes of a (possibly huge) .jsonl, dropping the
+// leading partial line so every returned line parses.
+function tailRead(file, maxBytes) {
+  let fd;
+  try {
+    const st = fs.statSync(file);
+    const start = Math.max(0, st.size - maxBytes);
+    const len = st.size - start;
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, start);
+    let text = buf.toString('utf8');
+    if (start > 0) {
+      const nl = text.indexOf('\n');
+      if (nl >= 0) text = text.slice(nl + 1);
+    }
+    return text;
+  } catch (_) {
+    return '';
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) { /* ignore */ } }
+  }
+}
+
+// Last assistant PROSE block in the session. Caveat: returns the most recent
+// TEXT message — if the session's final action was a tool call (no prose), this
+// is the prose that preceded it; resume the session for the live tail. Window
+// is 1MB so a large trailing tool_result rarely evicts the last text record.
+function lastAssistantText(file) {
+  const lines = tailRead(file, 1024 * 1024).split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const t = lines[i].trim();
+    if (!t) continue;
+    let entry;
+    try { entry = JSON.parse(t); } catch (_) { continue; }
+    if (!entry || entry.type !== 'assistant' || !entry.message) continue;
+    const content = entry.message.content;
+    let chunk = '';
+    if (typeof content === 'string') chunk = content;
+    else if (Array.isArray(content)) {
+      chunk = content
+        .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+        .map((b) => b.text)
+        .join(' ');
+    }
+    chunk = chunk.trim();
+    if (chunk) return chunk;
+  }
+  return '';
+}
+
+function cmdSessionSummary(idArg) {
+  const id = idArg === true ? '' : idArg;
+  const { match: s, candidates } = findSession(id);
+  if (!s) {
+    if (candidates.length > 1) {
+      process.stderr.write(`room: "${id}" is ambiguous — ${candidates.length} matches:\n`);
+      for (const c of candidates) process.stderr.write(`  ${(c.label || shortId(c.session_id)).slice(0, 24).padEnd(24)} ${c.session_id}\n`);
+      process.stderr.write('disambiguate with a longer id prefix or the full id.\n');
+    } else {
+      process.stderr.write(`room: no session matching "${id}" (see \`room sessions\`)\n`);
+    }
+    process.exit(2);
+  }
+  const live = isLive(s, liveSet()) ? 'live' : 'idle';
+  let file = s.file;
+  if (!file || !fs.existsSync(file)) file = globSessionFile(s.session_id);
+  process.stdout.write(`${s.label || shortId(s.session_id)} (${live}, ${fmtAgo(s.mtime)}, ${s.cwd || '?'})\n`);
+  process.stdout.write(`id: ${s.session_id}\n`);
+  const last = file ? lastAssistantText(file) : '';
+  if (last) {
+    const clipped = last.length > 600 ? `${last.slice(0, 600)}…` : last;
+    process.stdout.write(`Last: ${clipped}\n`);
+  } else {
+    process.stdout.write('Last: (no assistant message found)\n');
+  }
+}
+
+function cmdSessions(flags) {
+  if (flags.summary !== undefined) return cmdSessionSummary(flags.summary);
+  const sessions = readSessionsSnapshot();
+  if (!sessions.length) {
+    process.stdout.write('no sessions snapshot yet (is the deck running? open the sidebar once)\n');
+    return undefined;
+  }
+  const liveReg = liveSet();
+  const liveN = sessions.filter((s) => isLive(s, liveReg)).length;
+  process.stdout.write(`${sessions.length} session(s) (${liveN} live, ${sessions.length - liveN} idle):\n`);
+  for (const s of sessions) {
+    const mark = s.session_id === SELF_ID ? '*' : ' ';
+    const label = (s.label || shortId(s.session_id)).slice(0, 24).padEnd(24);
+    const state = isLive(s, liveReg) ? 'live' : 'idle';
+    process.stdout.write(`${mark} ${label} ${s.session_id}  ${state}  ${fmtAgo(s.mtime).padEnd(8)} ${s.cwd || ''}\n`);
+  }
+  process.stdout.write('\nresume idle: room resume <session_id>   summarize: room sessions --summary <id>\n');
+  return undefined;
+}
+
+function main() {
+  const [cmd, ...rest] = process.argv.slice(2);
+  const flags = parseArgs(rest);
+  switch (cmd) {
+    case 'send': return cmdSend(flags);
+    case 'inbox': return cmdInbox(flags);
+    case 'tail': return cmdTail(flags);
+    case 'who': return cmdWho();
+    case 'sessions': return cmdSessions(flags);
+    case 'whoami': return cmdWhoami();
+    case 'lead': return cmdLead(flags);
+    case 'spawn': return cmdSpawn(flags);
+    case 'resume': return cmdResume(flags);
+    default:
+      process.stderr.write('usage: room <send|inbox|tail|who|sessions|whoami|lead|spawn|resume> [...]\n');
+      process.exit(cmd ? 2 : 0);
+  }
+  return undefined;
+}
+
+main();

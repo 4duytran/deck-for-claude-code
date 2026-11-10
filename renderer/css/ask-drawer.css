@@ -1,0 +1,279 @@
+/* Ask drawer (.ask-drawer): question drawer above the composer, on the deck tokens.
+   The drawer sits on --dock with a --rule-2 hairline; options follow the mockup .opt look
+   (ink-2 at rest, --lift on hover, --lift-2 with a ring when chosen); the validate control
+   is the one teal-gradient button (mockup .btn-go). No pill, no coloured side bar, no
+   backdrop-filter (the drawer animates height). Motion: body height via
+   grid-template-rows 0fr <-> 1fr, colour fades, opacity/transform mount fade.
+   No keyframes; reduced motion switches all of it off at the bottom. */
+
+.ask-drawer {
+  --ask-pad: 14px;
+  /* Open-body cap. Terminal face: .pane is no size container, but its min-height is 420px,
+     so 216px leaves the xterm >= 5 rows there; the chat face scales with its .pane-chat. */
+  --ask-cap: 216px;
+  box-sizing: border-box;
+  width: auto;
+  margin: 0 12px 8px; /* terminal gutter, as .pane-term */
+  overflow: hidden;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--dock);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-1);
+  box-shadow: none;
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--dur-drawer) var(--ease-out), transform var(--dur-drawer) var(--ease-out);
+}
+/* Mount fade: the first style of a new drawer starts here (compositor-only). */
+@starting-style {
+  .ask-drawer { opacity: 0; transform: translateY(8px); }
+}
+/* chat face: same edges as the composer card (max 820px, centred, 16px gutter) at any width,
+   docked on its top edge (rounded top, flat bottom, no gap); no blur, the drawer animates */
+.ask-drawer[data-face="chat"] {
+  --ask-cap: 46cqh;
+  margin-inline: max(16px, (100% - 820px) / 2);
+  margin-bottom: 0;
+  border-bottom-color: transparent;
+  border-radius: var(--r-1) var(--r-1) 0 0;
+}
+.ask-drawer [hidden] { display: none !important; }
+
+/* ---- header (toggle) ---- */
+.ask-head {
+  appearance: none;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 10px var(--ask-pad);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
+  transition: background-color var(--dur-color) ease, border-color var(--dur-color) ease, color var(--dur-color) ease;
+}
+.ask-head:hover { background: var(--lift); }
+.ask-head:focus-visible { outline: 1.5px solid var(--ring); outline-offset: -2px; }
+.ask-drawer[data-open="true"] .ask-head { border-bottom-color: var(--rule); }
+.ask-ico { flex: none; width: 16px; height: 16px; }
+.ask-head > .ask-ico { color: var(--ink-3); }
+/* the source of the question: a coloured word (mockup .src), never a capsule */
+.ask-chip {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 38%;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--s-wait);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.ask-chip .ask-ico { width: 14px; height: 14px; }
+.ask-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-head-q {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  transition: opacity var(--dur-color) ease;
+}
+.ask-drawer[data-open="true"] .ask-head-q { opacity: 0; }
+.ask-queue { flex: none; font-size: 11px; font-weight: 500; white-space: nowrap; color: var(--s-wait); }
+.ask-count { flex: none; font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-3); }
+
+/* ---- body: a 0fr row clips the inner box, so the height never needs a keyframe ---- */
+.ask-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition: grid-template-rows var(--dur-height) var(--ease-out), visibility var(--dur-height) var(--ease-out);
+}
+.ask-drawer[data-open="true"] .ask-body { grid-template-rows: 1fr; visibility: visible; }
+.ask-body-inner {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  max-height: var(--ask-cap);
+  overflow: hidden;
+  padding: 0 var(--ask-pad);
+}
+/* vertical spacing as margins: padding would keep the collapsed row open */
+.ask-body-inner > :first-child { margin-top: 12px; }
+.ask-body-inner > :last-child { margin-bottom: var(--ask-pad); }
+/* the capped body keeps question, hint and nav; the options absorb the shortfall and scroll */
+.ask-q { flex: none; max-height: 4.4em; overflow-y: auto; font-size: 14px; font-weight: 500; line-height: 1.45; overflow-wrap: anywhere; color: var(--ink); }
+.ask-hint { margin-top: -4px; font-size: 11.5px; color: var(--ink-3); }
+/* 2px padding / -2px margin: keeps the focus outline of the edge options inside the scroll box */
+.ask-opts { display: flex; flex: 0 1 auto; flex-direction: column; gap: 2px; min-height: 0; margin: -2px; padding: 2px; overflow-y: auto; }
+.ask-q::-webkit-scrollbar, .ask-opts::-webkit-scrollbar { width: 6px; }
+.ask-q::-webkit-scrollbar-track, .ask-opts::-webkit-scrollbar-track { background: transparent; }
+.ask-q::-webkit-scrollbar-thumb, .ask-opts::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 999px; }
+.ask-q::-webkit-scrollbar-thumb:hover, .ask-opts::-webkit-scrollbar-thumb:hover { background: var(--ring); }
+
+/* ---- options (mockup .opt): ink-2 at rest, lift on hover, lift-2 + ring when chosen ---- */
+.ask-opt {
+  appearance: none;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  font: inherit;
+  text-align: left;
+  color: var(--ink-2);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transition: background-color var(--dur-color) ease, border-color var(--dur-color) ease, color var(--dur-color) ease, opacity var(--dur-color) ease;
+}
+button.ask-opt:hover:not(:disabled), label.ask-other:hover { background: var(--lift); color: var(--ink); }
+.ask-opt:focus-visible { outline: 1.5px solid var(--ring); outline-offset: 0; }
+.ask-opt:disabled { cursor: default; opacity: 0.6; }
+.ask-opt.is-selected {
+  color: var(--ink);
+  background: var(--lift-2);
+  border-color: var(--rule-2);
+}
+.ask-mark {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--ground);
+  border: 1px solid var(--ink-4);
+  border-radius: 50%;
+  transition: background-color var(--dur-color) ease, border-color var(--dur-color) ease;
+}
+.ask-opt[role="checkbox"] .ask-mark { border-radius: 5px; }
+.ask-opt.is-selected .ask-mark { background: var(--ink); border-color: var(--ink); }
+.ask-mark .ask-ico { width: 12px; height: 12px; }
+.ask-opt-text { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
+.ask-opt-label { font-size: 13px; font-weight: 400; line-height: 1.35; overflow-wrap: anywhere; }
+.ask-opt-desc { font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; color: var(--ink-3); }
+.ask-kbd {
+  flex: none;
+  box-sizing: border-box;
+  min-width: 20px;
+  margin-left: auto;
+  font: 400 11px/20px var(--font-mono);
+  text-align: right;
+  color: var(--ink-3);
+  background: transparent;
+  border: 0;
+}
+
+/* « Autre »: text mirror (chat face, a div) or its own input (terminal face, a label) */
+.ask-other { cursor: default; }
+label.ask-other { cursor: text; }
+.ask-other:focus-within { border-color: var(--ring); }
+.ask-other > .ask-ico { color: var(--ink-3); }
+.ask-other > .ask-opt-label { flex: none; }
+.ask-other-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-3);
+}
+.ask-other.is-selected .ask-other-text { color: var(--ink); }
+.ask-other-input {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--well);
+  border: 1px solid var(--rule-2);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color var(--dur-color) ease;
+}
+.ask-other-input:focus { border-color: var(--ring); }
+.ask-other-input::placeholder { color: var(--ink-4); opacity: 1; }
+.ask-other-input:disabled { opacity: 0.6; }
+
+.ask-status { font-size: 12px; color: var(--s-wait); }
+.ask-status:empty { display: none; }
+
+/* ---- navigation ---- */
+.ask-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ask-btn {
+  appearance: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  margin: 0;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--ink-2);
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--rule-2);
+  border-radius: 8px;
+  transition: background-color var(--dur-color) ease, border-color var(--dur-color) ease, color var(--dur-color) ease, opacity var(--dur-color) ease;
+}
+.ask-btn:not(.ask-primary):hover:not(:disabled) { color: var(--ink); background: var(--lift); }
+.ask-btn:focus-visible { outline: 1.5px solid var(--ring); outline-offset: 1px; }
+.ask-btn:disabled { cursor: default; opacity: 0.45; }
+.ask-btn .ask-ico { width: 14px; height: 14px; }
+.ask-btn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ask-prev { padding-left: 9px; }
+.ask-term { color: var(--ink-3); background: transparent; border-color: transparent; }
+/* validate / send: the one coloured control (mockup .btn-go) */
+.ask-primary {
+  margin-left: auto;
+  padding: 0 14px;
+  font-weight: 500;
+  color: var(--c-on-accent);
+  background: linear-gradient(180deg, #7FF0DE 0%, #45D6BF 100%);
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 18px -8px rgba(94, 234, 212, 0.7);
+  transition: transform var(--dur-color) var(--ease-out), box-shadow var(--dur-pop) var(--ease-out), opacity var(--dur-color) ease;
+}
+.ask-primary:hover:not(:disabled) { transform: translateY(-1px); }
+.ask-primary:active:not(:disabled) { transform: scale(0.96); }
+.ask-drawer[data-state="sending"] .ask-body-inner { cursor: progress; }
+.ask-drawer[data-state="sending"] .ask-primary:disabled { opacity: 0.75; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-drawer, .ask-drawer * { animation: none !important; transition: none !important; }
+}
