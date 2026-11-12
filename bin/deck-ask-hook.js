@@ -5,10 +5,12 @@
 // `answers` file yields stdout (an `allow` carrying the answers); every other path prints nothing and exits 0, so
 // the CLI shows its native menu. It never writes a status file (the deck does) and never answers on its own.
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const STDIN_DEADLINE_MS = 2000;
+const PS_TIMEOUT_MS = 1000;
 const POLL_MS = 100;
 const TIMEOUT_S = 86400; // the injected hook `timeout` (T): 24 h, the terminal's menu never expires either
 const MAX_PIDS = 16;
@@ -52,21 +54,45 @@ function buildRequest(payload, ts, rand, pids) {
   return req;
 }
 
-// This hook's ancestor pids (parent first), from /proc on Linux; just the parent elsewhere. The deck matches them against
-// its pane processes, so a question still reaches its pane after the session id changed (/clear typed in the terminal).
-function ancestorPids() {
+// This hook's ancestor pids (parent first): /proc on Linux, one `ps` snapshot on macOS (no /proc there). The deck matches
+// them against its pane processes, so a question still reaches its pane after the session id changed (/clear typed in the
+// terminal). Both readers fail open to whatever they could read (the parent alone at worst), never throw.
+function walkAncestors(parentOf) {
   const out = [];
   let pid = process.ppid;
   while (Number.isInteger(pid) && pid > 1 && out.length < MAX_PIDS && !out.includes(pid)) {
     out.push(pid);
-    let next = 0;
-    try {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-      next = Number(stat.slice(stat.lastIndexOf(')') + 1).trim().split(' ')[1]); // "pid (comm) state ppid ..."
-    } catch (_) { /* no /proc or the process is gone */ }
-    pid = next;
+    pid = parentOf(pid);
   }
   return out;
+}
+
+function ancestorPidsProc() {
+  return walkAncestors((pid) => {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      return Number(stat.slice(stat.lastIndexOf(')') + 1).trim().split(' ')[1]); // "pid (comm) state ppid ..."
+    } catch (_) { return 0; /* no /proc or the process is gone */ }
+  });
+}
+
+function ancestorPidsPs() {
+  const parents = new Map();
+  try {
+    const table = execFileSync('ps', ['-Ao', 'pid=,ppid='], {
+      encoding: 'utf8', timeout: PS_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 8 * 1024 * 1024,
+    });
+    for (const line of table.split('\n')) {
+      const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+      if (m) parents.set(Number(m[1]), Number(m[2]));
+    }
+  } catch (_) { parents.clear(); /* no ps, a timeout or a bad exit: the walk stops at the parent */ }
+  return walkAncestors((pid) => parents.get(pid) || 0);
+}
+
+// CLAUDE_DECK_ASK_FORCE_PS=1 is a probe seam (test/ask-ancestry-probe.js): it puts Linux on the macOS reader. The app sets none.
+function ancestorPids() {
+  return process.platform === 'darwin' || process.env.CLAUDE_DECK_ASK_FORCE_PS === '1' ? ancestorPidsPs() : ancestorPidsProc();
 }
 
 // Hook stdout for an answer file, or null (-> native menu). Strict: kind `answers`, every question answered with a
@@ -176,6 +202,8 @@ function main(argv) {
   return process.exit(0);
 }
 
-module.exports._internals = { questionTexts, requestId, buildRequest, answerOutput, readPid, deadlineMs, ancestorPids };
+module.exports._internals = {
+  questionTexts, requestId, buildRequest, answerOutput, readPid, deadlineMs, ancestorPids, ancestorPidsProc, ancestorPidsPs,
+};
 
 if (require.main === module) main(process.argv.slice(2));
