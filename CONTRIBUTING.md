@@ -10,8 +10,9 @@ a rejected pull request.
 ## Set up
 
 You need the tools listed in the [README requirements](README.md#requirements):
-Linux with an X11 session, Node.js 22.12 or newer, the Claude Code CLI, `jq`, and a
-C/C++ toolchain (`npm install` rebuilds `node-pty` against Electron's ABI).
+Linux with an X11 session (or macOS with the Xcode Command Line Tools), Node.js 22.12
+or newer, the Claude Code CLI, `jq`, and a C/C++ toolchain (`npm install` rebuilds
+`node-pty` against Electron's ABI).
 
 ```bash
 git clone https://github.com/4duytran/claude-deck
@@ -32,9 +33,9 @@ ls -l node_modules/electron/dist/electron
 The test runner needs the binary, and `npm start` downloads it on first run when
 it is missing (about 100 MB, cached in `~/.cache/electron`).
 
-On Ubuntu 24.04 and later, Electron also needs its `chrome-sandbox` helper to be
-`root:root 4755`, or it dies with `FATAL setuid_sandbox_host` before any window
-opens. The fix and the fallback are in the
+On Ubuntu 24.04 and later (Linux only, not needed on macOS), Electron also needs
+its `chrome-sandbox` helper to be `root:root 4755`, or it dies with
+`FATAL setuid_sandbox_host` before any window opens. The fix and the fallback are in the
 [README requirements](README.md#requirements). Run it after the binary is
 installed, and redo it after every Electron reinstall.
 
@@ -64,6 +65,8 @@ TEST_VISIBLE=1 bash test/run.sh zoom-probe
 - By default the runner re-executes itself under `xvfb-run`, so no window
   appears on your desktop. Install `xvfb` for that. Without it the probe windows
   open on your display, with a notice.
+- macOS has no `xvfb-run`, so probe windows open on your display, and some probes
+  are Linux-first (`/proc`, xdg): a green sweep is not promised on macOS.
 - `TEST_VISIBLE=1` skips the private Xvfb and runs on your real display. Use it
   to watch a probe.
 - Each probe writes its output to `test/<name>.out` (git-ignored). On a failure,

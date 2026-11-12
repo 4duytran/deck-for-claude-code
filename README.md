@@ -32,7 +32,8 @@ All screenshots show demo data (fictional projects, people and merge requests).
 
 - **Terminal grid** — multiple live `claude` panes (node-pty + xterm.js), with
   smart copy/paste: system CLIPBOARD on Ctrl+C/V and X11 PRIMARY copy-on-select
-  with middle-click paste.
+  with middle-click paste. PRIMARY copy-on-select is Linux-only; on macOS,
+  Cmd+C / Cmd+V go through the app menu.
 - **New session anywhere** — a "new session" menu with a native folder picker or
   a quick-typed path. The deck fixes `--session-id` at spawn, so the pane adopts
   the session immediately and the chat view works before the first message.
@@ -96,7 +97,8 @@ All screenshots show demo data (fictional projects, people and merge requests).
 
 ## Requirements
 
-- **Linux with an X11 session** (developed and tested on Ubuntu).
+- **Linux with an X11 session** (developed and tested on Ubuntu), or **macOS**
+  (see [macOS](#macos) below).
 - **Claude Code CLI** (`claude`) installed, on your `PATH` and logged in.
 - **Node.js 22.12 or newer**, with npm (the minimum of Electron 42).
 - **`jq`**, used by the shipped `bin/` status and quota scripts.
@@ -109,7 +111,7 @@ The deck runs a boot **preflight** that warns, on the console and with a one-sho
 dialog, when `claude` or `jq` is missing, instead of letting the dependent
 feature fail silently.
 
-> **Ubuntu 24.04+ sandbox**: AppArmor restricts unprivileged user namespaces, so
+> **Ubuntu 24.04+ sandbox (Linux only)**: AppArmor restricts unprivileged user namespaces, so
 > Electron's `chrome-sandbox` helper must be `root:root 4755`:
 >
 > ```bash
@@ -123,6 +125,27 @@ feature fail silently.
 > `FATAL setuid_sandbox_host` before any window opens. As a fallback you can
 > start the app with `ELECTRON_DISABLE_SANDBOX=1`: the deck only loads local
 > content, with `contextIsolation` on and a restrictive CSP.
+
+### macOS
+
+macOS support is new. On a first macOS CI run (macOS 15 Intel and macOS 26 Apple
+Silicon), `npm ci` with the `node-pty` source build, `npx install-electron --no`
+and the boot probe all passed. The full probe sweep has not run on macOS yet.
+
+- **Xcode Command Line Tools** (`xcode-select --install`): the `npm install`
+  postinstall builds `node-pty` from source.
+- **Node.js 22.12 or newer**, with npm.
+- **Claude Code CLI** (`claude`) on the `PATH` of your login shell, and logged in.
+- **`jq`** (`brew install jq`).
+
+There is no `chrome-sandbox` step on macOS. What differs from Linux:
+
+- A native app menu (Cmd+C / V / A / Q); X11 PRIMARY copy-on-select is Linux-only.
+- The deck reads your login-shell environment (`~/.zprofile`), so Homebrew's
+  `/opt/homebrew/bin` is found. The panel terminal is a login shell.
+- The plugin environment listing accepts zsh, and Homebrew is on the plugin `PATH`.
+- Process ancestry comes from `ps` (there is no `/proc`).
+- The terminal font falls back to SF Mono or Menlo.
 
 ## Install
 
@@ -139,6 +162,19 @@ Since Electron 42, `npm install` no longer downloads the Electron binary. Run
 `npm start` downloads the binary by itself. On Ubuntu 24.04+, apply the
 `chrome-sandbox` fix from [Requirements](#requirements) once the binary is
 installed.
+
+On macOS, install the [requirements](#macos) first, then run the same commands.
+The `chrome-sandbox` step does not apply:
+
+```bash
+xcode-select --install   # once, for the node-pty source build
+brew install jq          # once
+git clone https://github.com/4duytran/claude-deck
+cd claude-deck
+npm install
+npx install-electron --no
+npm start
+```
 
 ## Claude Code integration
 
@@ -359,6 +395,10 @@ zoom. Each probe writes its output to `test/<name>.out`; the last line is
 `===== SWEEP: N ok / M bad =====` and the exit code is 1 when any probe is bad.
 Run `npm install` first: the runner needs `node_modules/.bin/electron`.
 
+On macOS there is no `xvfb`, so probe windows open on your display, and some
+probes and fixtures still assume Linux (`/proc`, xdg): a green sweep is not
+promised there.
+
 Quick syntax gates while you work:
 
 ```bash
@@ -379,7 +419,8 @@ Probes drive the renderer through `executeJavaScript` against the **probe seam**
 - Status badges need deck-spawned (or globally hooked) sessions.
 - The usage figures are an estimate calibrated on local history, not the
   server-side limit.
-- Linux and X11 only; the interface text is French.
+- Linux (X11) and macOS; macOS support is new and has been checked on CI for
+  install and boot only. The interface text is French.
 
 ## Contributing
 

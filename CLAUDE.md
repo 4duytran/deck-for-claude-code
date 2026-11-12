@@ -11,7 +11,8 @@ side by side: a terminal grid, a session sidebar, a chat view, a side panel
 preload + renderer; the main process is Node CommonJS, the renderer is native ES
 modules; `node-pty` is the one native addon.
 
-There is no CI service, no unit-test framework, no TypeScript and no linter. Quality
+There is one manual CI workflow, `.github/workflows/macos.yml`, that runs `npm ci` and the
+probe sweep on GitHub macOS runners; no unit-test framework, no TypeScript, no linter. Quality
 is enforced by the E2E probes in `test/` (run them with `npm test`) and by the
 non-negotiable rules below. The app is French-language: product strings shown to the
 user are French; identifiers, comments, commit messages and docs stay English.
