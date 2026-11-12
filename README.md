@@ -129,15 +129,11 @@ feature fail silently.
 
 ### macOS
 
+Asking Claude Code to install it? Point it at this section.
+
 macOS support is new. On a first macOS CI run (macOS 15 Intel and macOS 26 Apple
 Silicon), `npm ci` with the `node-pty` source build, `npx install-electron --no`
 and the boot probe all passed. The full probe sweep has not run on macOS yet.
-
-- **Xcode Command Line Tools** (`xcode-select --install`): the `npm install`
-  postinstall builds `node-pty` from source.
-- **Node.js 22.12 or newer**, with npm.
-- **Claude Code CLI** (`claude`) on the `PATH` of your login shell, and logged in.
-- **`jq`** (`brew install jq`).
 
 There is no `chrome-sandbox` step on macOS. What differs from Linux:
 
@@ -148,13 +144,143 @@ There is no `chrome-sandbox` step on macOS. What differs from Linux:
 - Process ancestry comes from `ps` (there is no `/proc`).
 - The terminal font falls back to SF Mono or Menlo.
 
+#### Install on macOS, step by step
+
+Run each step in Terminal, in order, and confirm its check before the next one.
+The commands are safe to rerun. Steps 1, 2, 5 and 7 can stop on a prompt only the
+user can answer (a macOS dialog, an administrator password, a login): ask the
+user to handle it, then rerun the check.
+
+1. **Xcode Command Line Tools** (the `npm install` postinstall builds `node-pty`
+   from source).
+
+   ```bash
+   xcode-select -p >/dev/null 2>&1 || xcode-select --install
+   ```
+
+   Check: `xcode-select -p` prints a path such as `/Library/Developer/CommandLineTools`.
+   `xcode-select --install` opens a macOS dialog that the user must accept, then
+   installs for a few minutes; the command itself returns at once, so rerun the
+   check until it prints the path.
+
+2. **Homebrew**, from [brew.sh](https://brew.sh).
+
+   ```bash
+   command -v brew >/dev/null 2>&1 || [ -x /opt/homebrew/bin/brew ] || /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+
+   The installer asks for the administrator password and a Return key press. On
+   Apple Silicon, put Homebrew on the login-shell `PATH` (the installer prints this
+   line at the end; on Intel, `/usr/local/bin` is already on the `PATH`):
+
+   ```bash
+   grep -qs 'brew shellenv' ~/.zprofile || echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+   eval "$(/opt/homebrew/bin/brew shellenv)"
+   ```
+
+   Check: `brew --version` prints a version. A shell that does not keep its
+   environment between commands needs the `eval` line at the start of each one.
+
+3. **Node.js 22.12 or newer**, with npm.
+
+   ```bash
+   command -v node >/dev/null 2>&1 || brew install node
+   ```
+
+   Check: `node -v` prints `v22.12.0` or newer, and `npm -v` prints a version.
+   Older: `brew upgrade node` (a Node from another installer is upgraded with that
+   installer).
+
+4. **`jq`**, used by the shipped `bin/` scripts.
+
+   ```bash
+   command -v jq >/dev/null 2>&1 || brew install jq
+   ```
+
+   Check: `jq --version` prints a version.
+
+5. **Claude Code CLI** (`claude`), installed and logged in. If `claude` is missing,
+   install it from the [Claude Code setup guide](https://code.claude.com/docs/en/setup).
+
+   Check: `claude --version` prints a version. If you never logged in, run `claude`
+   once in Terminal and complete the login.
+
+6. **Login-shell `PATH`.** The deck reads your login-shell environment
+   (`$SHELL -l -i -c "env -0"`), so `claude`, `jq` and `node` must be found by a
+   login zsh, not only by the shell you are typing in.
+
+   ```bash
+   zsh -l -i -c 'command -v claude jq node'
+   ```
+
+   Check: it prints three absolute paths. A missing one means the deck will not
+   find it either: add the right `PATH` line to `~/.zprofile` (for Homebrew, the
+   `eval` line of step 2; for `claude`, the `export PATH=...` line its installer
+   suggests) and rerun this check.
+
+7. **Clone the repository.** It is private for now: a plain
+   `git clone https://github.com/4duytran/claude-deck` fails without credentials,
+   so use an account that has access. With the GitHub CLI, from the folder where
+   the app should live:
+
+   ```bash
+   command -v gh >/dev/null 2>&1 || brew install gh
+   gh auth status >/dev/null 2>&1 || gh auth login
+   [ -d claude-deck ] || gh repo clone 4duytran/claude-deck
+   ```
+
+   `gh auth login` is interactive (browser or one-time code): the user completes
+   it. An SSH clone also works when a key is registered on GitHub
+   (`git clone git@github.com:4duytran/claude-deck.git`).
+
+   Check: `ls claude-deck/package.json` finds the file.
+
+8. **Install the dependencies and the Electron binary.**
+
+   ```bash
+   cd claude-deck
+   npm install                 # builds node-pty from source for Electron (needs step 1)
+   npx install-electron --no   # downloads the Electron binary (about 100 MB) to ~/Library/Caches/electron
+   ```
+
+   Check: `npm install` exits 0, `ls node_modules/node-pty/build/Release/pty.node`
+   finds the file, and `node_modules/.bin/electron --version` prints a version.
+
+9. **Start the deck.**
+
+   ```bash
+   npm start
+   ```
+
+   `npm start` runs until the deck window is closed: an agent should start it in
+   the background and hand over to the user.
+
+   What you should see: the claude-deck window opens, with its session sidebar,
+   and no dialog titled "claude-deck — missing prerequisites".
+
+Update later: `cd claude-deck && git pull && npm install`. Do not use `npm test` as
+an install check on macOS: the probe suite is Linux-first.
+
+#### Troubleshooting on macOS
+
+- **`npm install` fails while building `node-pty`** (a compiler, `gyp` or `xcrun`
+  error): install the Command Line Tools (step 1), then rerun `npm install`.
+- **A "missing prerequisites" dialog opens at boot** (it blocks the app until OK is
+  clicked): `claude` or `jq` is not on your login-shell `PATH`. Fix it with the
+  check of step 6, click OK, and restart the deck.
+- **The Electron download hangs or the binary is corrupt**: delete
+  `~/Library/Caches/electron`, then rerun `npx install-electron --no`.
+- **`xcode-select --install` seems to do nothing**: it opens a GUI dialog that the
+  user must accept. An agent cannot click it; ask the user, wait for the install to
+  finish, then rerun `xcode-select -p`.
+
 ## Install
 
 ```bash
 git clone https://github.com/4duytran/claude-deck
 cd claude-deck
 npm install   # the postinstall step rebuilds node-pty for Electron (mandatory)
-npx install-electron --no   # downloads the Electron binary (about 100 MB, cached in ~/.cache/electron)
+npx install-electron --no   # downloads the Electron binary (about 100 MB; cached in ~/.cache/electron on Linux, ~/Library/Caches/electron on macOS)
 npm start
 ```
 
@@ -164,18 +290,8 @@ Since Electron 42, `npm install` no longer downloads the Electron binary. Run
 `chrome-sandbox` fix from [Requirements](#requirements) once the binary is
 installed.
 
-On macOS, install the [requirements](#macos) first, then run the same commands.
-The `chrome-sandbox` step does not apply:
-
-```bash
-xcode-select --install   # once, for the node-pty source build
-brew install jq          # once
-git clone https://github.com/4duytran/claude-deck
-cd claude-deck
-npm install
-npx install-electron --no
-npm start
-```
+On macOS, follow [Install on macOS, step by step](#install-on-macos-step-by-step)
+instead.
 
 ## Claude Code integration
 
