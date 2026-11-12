@@ -4,10 +4,19 @@
 #   bash test/run.sh zoom-probe ...   run only the named probes
 #   TEST_VISIBLE=1 bash test/run.sh   run on the real display instead of a private Xvfb
 # Each probe writes its output to test/<name>.out (git-ignored). The last line is
-# "===== SWEEP: N ok / M bad =====" and the exit code is 1 when any probe is bad.
+# "===== SWEEP: N ok / M bad =====" and the exit code is 1 when any probe is bad. A
+# "SKIPPED: <probe>:<gate-id> ..." line before it lists the gates skipped on this machine.
 
 # Resolve the repository root from this script, so the run never depends on the caller's cwd.
-cd "$(dirname "$(readlink -f "$0")")/.." || { echo "FATAL: cannot resolve the repository root from $0" >&2; exit 1; }
+# A POSIX symlink loop replaces the GNU-only canonicalizing readlink (absent on macOS); SELF stays absolute for the re-exec.
+p=$0
+while [ -L "$p" ]; do
+  t=$(readlink "$p")
+  case $t in /*) p=$t ;; *) p=$(dirname "$p")/$t ;; esac
+done
+SELF_DIR=$(cd -P "$(dirname "$p")" && pwd -P) || { echo "FATAL: cannot resolve the repository root from $0" >&2; exit 1; }
+SELF=$SELF_DIR/$(basename "$p")
+cd -P "$SELF_DIR/.." || { echo "FATAL: cannot resolve the repository root from $0" >&2; exit 1; }
 
 # Invisible by default: the script re-executes itself on a private virtual X server, 3840x2160 so a
 # probe that captures a 1920x1080 window fits. The X11-forcing env is needed because Electron picks
@@ -15,7 +24,7 @@ cd "$(dirname "$(readlink -f "$0")")/.." || { echo "FATAL: cannot resolve the re
 if [ -z "$TEST_VISIBLE" ] && [ -z "$TEST_IN_XVFB" ]; then
   if command -v xvfb-run >/dev/null; then
     export TEST_IN_XVFB=1
-    exec env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 xvfb-run -a -s "-screen 0 3840x2160x24 -nolisten tcp" bash "$(readlink -f "$0")" "$@"
+    exec env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11 GDK_BACKEND=x11 xvfb-run -a -s "-screen 0 3840x2160x24 -nolisten tcp" bash "$SELF" "$@"
   fi
   echo "test: xvfb-run not found, the probe windows will open on your display (install xvfb, or set TEST_VISIBLE=1 to silence this notice)" >&2
 fi
@@ -40,15 +49,41 @@ trap 'rm -rf "$CLAUDE_DECK_PLUGINS_DIR"' EXIT
 PROBES="auto-refresh-probe card-icons-probe sidebar-style-probe goal-button-probe goal-footer-probe compact-slash-probe deferred-rename-probe display-integrity-probe estimator-probe git-panel-probe hidden-output-probe hybrid-merge-probe inject-probe mode-switch-probe named-session-probe plans-panel-probe reclick-noop-probe scroll-heal-probe shell-env-probe zoom-probe sidebar-agents-probe agent-journal-probe project-order-probe session-activity-probe paste-dedup-probe send-single-write-probe send-trace-probe send-stuck-retry-probe price-feed-probe commands-feed-probe slash-picker-probe commands-list-probe slash-send-probe html-page-probe html-view-probe git-log-probe plugin-host-probe plugin-manifest-probe plugin-access-probe plugin-runner-probe plugin-reports-probe plugin-install-probe plugin-page-serve-probe plugin-link-open-probe plugin-options-manifest-probe plugin-options-state-probe plugin-options-run-probe plugin-options-ipc-probe plugin-options-ui-probe plugin-journal-probe plugin-view-full-probe plugin-stop-probe plugin-nav-probe plugin-motion-probe plugin-flash-probe diff-expand-probe diff-expand-ipc-probe diff-gap-rows-probe plans-view-full-probe sidebar-epure-probe header-toolbar-probe files-view-full-probe refresh-spin-probe config-surface-probe boot-clean-probe room-mirror-probe room-mirror-router-probe room-inbound-settings-probe room-mirror-flag-probe room-native-name-probe agent-lifecycle-seed-probe agent-closed-session-probe agent-resume-probe feed-agent-state-probe chat-agent-state-probe agent-waiting-style-probe agent-three-consumer-probe agent-k6-states-probe agent-memo-session-probe agent-meta-session-probe agent-process-boundary-probe session-liveness-probe agent-lifecycle-core-probe agent-own-evidence-probe feed-liveness-lazy-probe agent-reopen-flash-probe"
 [ $# -gt 0 ] && PROBES="$*"
 
-PASS=0; FAIL=0; FAILED=""
+# GNU `timeout` is absent on macOS: coreutils' gtimeout when installed, else a bash 3.2 watchdog.
+# run_limited <seconds> <command...>; exit status 124 on expiry, like GNU timeout.
+run_limited() {
+  if command -v timeout >/dev/null; then timeout "$@"; return $?; fi
+  if command -v gtimeout >/dev/null; then gtimeout "$@"; return $?; fi
+  local secs=$1 pid wd rc
+  shift
+  "$@" &
+  pid=$!
+  (
+    fired=0
+    sleep "$secs" >/dev/null 2>&1 &
+    sp=$!
+    trap '[ "$fired" = 1 ] && exit 124; kill "$sp" 2>/dev/null; exit 0' TERM
+    wait "$sp" && { fired=1; kill -TERM "$pid" 2>/dev/null; exit 124; }
+  ) &
+  wd=$!
+  wait "$pid"; rc=$?
+  kill -TERM "$wd" 2>/dev/null
+  wait "$wd"
+  [ $? = 124 ] && rc=124
+  return $rc
+}
+
+PASS=0; FAIL=0; FAILED=""; SKIPPED=""
 for pr in $PROBES; do
   # A name with no file is a failure, never a silent skip (a typo must not turn `npm test` green).
   if [ ! -f "test/$pr.js" ]; then
     FAIL=$((FAIL+1)); FAILED="$FAILED $pr(missing)"; echo "BAD  $pr | no such probe: test/$pr.js"
     continue
   fi
-  timeout 180 node_modules/.bin/electron "test/$pr.js" > "test/$pr.out" 2>&1
+  run_limited 180 node_modules/.bin/electron "test/$pr.js" > "test/$pr.out" 2>&1
   rc=$?
+  # Gates a probe skipped on this machine (`SKIP <gate-id> ...` lines of THIS run's output).
+  for g in $(grep -E "^SKIP " "test/$pr.out" | cut -d' ' -f2); do SKIPPED="$SKIPPED $pr:$g"; done
   v=$(grep -cE "^FAIL " "test/$pr.out")
   verdict=$(grep -E "VERDICT|/[0-9]+ PASS" "test/$pr.out" | tail -1)
   if [ "$rc" = "0" ] && [ "$v" = "0" ]; then
@@ -58,5 +93,6 @@ for pr in $PROBES; do
   fi
 done
 [ -n "$FAILED" ] && echo "FAILED:$FAILED"
+[ -n "$SKIPPED" ] && echo "SKIPPED:$SKIPPED"
 echo "===== SWEEP: $PASS ok / $FAIL bad ====="
 exit $((FAIL>0))
