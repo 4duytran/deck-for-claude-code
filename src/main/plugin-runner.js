@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const OUTER_PATH = '/usr/local/bin:/usr/bin:/bin';
+const OUTER_PATH = process.platform === 'darwin' ? '/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin' : '/usr/local/bin:/usr/bin:/bin';
 const HOST_NAMES = ['DECK_PLUGIN_ID', 'DECK_PLUGIN_DATA_DIR', 'DECK_PLUGIN_REPORT', 'DECK_PLUGIN_TRIGGER', 'DECK_PLUGIN_DATE'];
 const TRIGGERS = ['auto', 'manual'];
 // Shells that cannot run the POSIX template; they fall back to bash. Anything else is run as given.

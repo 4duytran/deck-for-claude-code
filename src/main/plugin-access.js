@@ -4,6 +4,7 @@
 // the listing asks the shell for names, and every result carries names and statuses only.
 'use strict';
 
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -22,28 +23,44 @@ const MAX_OUTPUT = 1024 * 1024;
 const EXIT_GRACE_MS = 150;
 const BASH = '/bin/bash';
 const OUTER_PATH = '/usr/local/bin:/usr/bin:/bin';
+const HOMEBREW_PATH = '/opt/homebrew/bin:/opt/homebrew/sbin'; // darwin only, see outerPath()
 const MARKER = '__CLAUDE_DECK_NAMES_BEGIN__';
 const END = '__CLAUDE_DECK_NAMES_END__';
 // fd 3 only: the shell's own fds 0-2 are ignored, so rc output (a secret an rc echoes) can never reach a result.
 // `|| exit 1`: a shell without the `compgen` builtin ends before the end marker, a failed listing, never an empty one.
 const LIST_CMD = `printf '%s\\n' ${MARKER} >&3; compgen -e >&3 || exit 1; printf '%s\\n' ${END} >&3`;
 
+// zsh has no `compgen`: its `parameters` map holds every parameter's type, the (R) subscript keeps the exported ones, (k) their names.
+const ZSH_LIST_CMD = `print -r -- ${MARKER} >&3; print -rl -- \${(k)parameters[(R)*export*]} >&3; print -r -- ${END} >&3`;
+
 function validName(n) {
   return typeof n === 'string' && n.length <= NAME_MAX && NAME_RE.test(n);
 }
 
-// Allowlist: only bash is known to carry `compgen -e`; every other shell (zsh, fish, sh, dash, ksh, ...) is read through bash.
+function isExecutableFile(p) {
+  try { fs.accessSync(p, fs.constants.X_OK); return fs.statSync(p).isFile(); } catch (_) { return false; }
+}
+
+// Allowlist: bash carries `compgen -e`; zsh, the default shell of macOS, has its own listing and is accepted on darwin only
+// (and only when the binary is there). Every other shell (fish, sh, dash, ksh, ... and zsh elsewhere) is read through bash.
 function listingShell(shellPath) {
   if (typeof shellPath !== 'string' || !shellPath) return { shell: BASH, note: null };
-  if (path.basename(shellPath) === 'bash') return { shell: shellPath, note: null };
+  const name = path.basename(shellPath);
+  if (name === 'bash') return { shell: shellPath, note: null };
+  if (name === 'zsh' && process.platform === 'darwin' && isExecutableFile(shellPath)) return { shell: shellPath, note: null };
   return { shell: BASH, note: UNSUPPORTED_NOTE };
 }
+
+const listCmdOf = (shell) => (path.basename(shell) === 'zsh' ? ZSH_LIST_CMD : LIST_CMD);
+
+// Read at call time: darwin puts Homebrew first (an Apple-silicon install lives in /opt/homebrew), Linux keeps OUTER_PATH.
+const outerPath = () => (process.platform === 'darwin' ? `${HOMEBREW_PATH}:${OUTER_PATH}` : OUTER_PATH);
 
 function outerEnv(shell) {
   let u = {};
   try { u = os.userInfo(); } catch (_) { /* no passwd entry: USER stays empty, no env fallback */ }
   const user = u.username || '';
-  return { HOME: u.homedir || '', USER: user, LOGNAME: user, SHELL: shell, PATH: OUTER_PATH };
+  return { HOME: u.homedir || '', USER: user, LOGNAME: user, SHELL: shell, PATH: outerPath() };
 }
 
 // Lines between the two markers, or null while either is missing. Lines before the marker (rc noise) are dropped.
@@ -59,10 +76,17 @@ function parseListing(buf) {
 const fail = (reason) => ({ ok: false, error: LIST_ERROR, reason });
 
 // Resolves {ok: true, names, note} or {ok: false, error, reason}; never rejects. `reason` is a fixed word.
+// A zsh whose listing fails is read again through bash, with the unsupported note.
+async function listNames(shellPath, timeoutMs = LIST_TIMEOUT_MS) {
+  const { shell, note } = listingShell(shellPath);
+  const res = await listWith(shell, note, timeoutMs);
+  if (res.ok || path.basename(shell) !== 'zsh') return res;
+  return listWith(BASH, UNSUPPORTED_NOTE, timeoutMs);
+}
+
 // The marker on fd 3 is how an rc or exec failure (no marker) is told apart from an empty listing.
-function listNames(shellPath, timeoutMs = LIST_TIMEOUT_MS) {
+function listWith(shell, note, timeoutMs) {
   return new Promise((resolve) => {
-    const { shell, note } = listingShell(shellPath);
     const limit = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : LIST_TIMEOUT_MS;
     let done = false;
     let buf = '';
@@ -82,7 +106,7 @@ function listNames(shellPath, timeoutMs = LIST_TIMEOUT_MS) {
       resolve(res);
     };
     try {
-      child = spawn(shell, ['-ic', LIST_CMD], {
+      child = spawn(shell, ['-ic', listCmdOf(shell)], {
         env: outerEnv(shell), stdio: ['ignore', 'ignore', 'ignore', 'pipe'], detached: true,
       });
     } catch (_) {

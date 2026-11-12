@@ -21,11 +21,23 @@
 //   valid-name, routing (allowlist: bash as given, every other shell through /bin/bash with a note)
 //   dash_via_bash, no_compgen (a shell without the compgen builtin fails the listing instead of listing nothing)
 //   Every fake shell is a copy of the fixture named `bash` in its own mkdtemp folder (the allowlist goes by basename).
+//   macOS support (L7): zsh is listed only on darwin, with its own native command; darwin is stubbed through
+//   process.platform on Linux, so the darwin branch is observed on both systems. A gate prints PASS, FAIL or
+//   SKIP (a skipped gate counts neither way; run.sh lists it in its SKIPPED line).
+//   pa-zsh-list     a real zsh lists the names exported from ~/.zshrc (macOS; Linux only when a zsh is installed)
+//   pa-zsh-fake     a zsh-named shell is run as `-ic <zsh listing>` inside the same fence; its output is parsed
+//   pa-zsh-fallback a zsh whose listing fails -> the /bin/bash listing and the unsupported note
+//   pa-zsh-absent   a zsh path that does not exist -> the /bin/bash fallback and the unsupported note
+//   pa-zsh-linux    linux: zsh keeps the bash fallback, even a runnable zsh is never started (skipped on darwin)
+//   pa-bash-unchanged bash: same command, args and routing as before, a .bashrc export is listed
+//   pa-outer-path   OUTER_PATH of plugin-access and of plugin-runner: Homebrew first on darwin, unchanged on linux
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const assert = require('assert');
-const { spawnSync } = require('child_process');
+const cp = require('child_process');
+const { EventEmitter } = require('events');
+const { spawnSync } = cp;
 const { app } = require('electron');
 
 const SRC = process.env.PLUGIN_ACCESS_SRC ? path.resolve(process.env.PLUGIN_ACCESS_SRC) : path.join(__dirname, '..', 'src', 'main');
@@ -65,17 +77,79 @@ function variant(name) {
 const hits = (obj) => { const s = JSON.stringify(obj); return FAKE_VALUES.filter((v) => s.includes(v)).length + (s.includes('FAKE-SECRET') ? 1 : 0); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+class Skip extends Error {}
+const skip = (reason) => { throw new Skip(reason); };
+
 async function gate(name, desc, fn) {
   let ok = true;
   let info = '';
-  try { await fn(); } catch (e) { ok = false; info = String((e && e.message) || e).split('\n').slice(0, 3).join(' | '); }
+  try { await fn(); } catch (e) {
+    if (e instanceof Skip) {
+      results.push({ name, ok: true, skipped: true });
+      origLog(`SKIP ${name} — ${e.message}`);
+      return;
+    }
+    ok = false;
+    info = String((e && e.message) || e).split('\n').slice(0, 3).join(' | ');
+  }
   results.push({ name, ok });
-  origLog(`${ok ? 'PASS' : 'FAIL'} ${name} - ${desc}${info ? ` :: ${info}` : ''}`);
+  origLog(`${ok ? 'PASS' : 'FAIL'} ${name} — ${desc}${info ? ` :: ${info}` : ''}`);
 }
 
-const pidsRunning = (needle) => fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)).filter((d) => {
-  try { return fs.readFileSync(`/proc/${d}/cmdline`, 'utf8').includes(needle); } catch (_) { return false; }
-});
+// Linux lists /proc; macOS has no /proc, `ps` prints "pid command" with the arguments space-joined where cmdline is NUL-joined.
+const pidsRunning = (needle) => {
+  if (process.platform === 'darwin') {
+    const flat = needle.replace(/\0/g, ' ');
+    const ps = spawnSync('ps', ['-Ao', 'pid=,command='], { encoding: 'utf8' });
+    return String(ps.stdout || '').split('\n').filter((l) => l.includes(flat)).map((l) => l.trim().split(/\s+/)[0]);
+  }
+  return fs.readdirSync('/proc').filter((d) => /^\d+$/.test(d)).filter((d) => {
+    try { return fs.readFileSync(`/proc/${d}/cmdline`, 'utf8').includes(needle); } catch (_) { return false; }
+  });
+};
+
+const HEAD_PATH = '/usr/local/bin:/usr/bin:/bin';
+const DARWIN_PATH = `/opt/homebrew/bin:/opt/homebrew/sbin:${HEAD_PATH}`;
+const WANT_PATH = process.platform === 'darwin' ? DARWIN_PATH : HEAD_PATH;
+const UNSUPPORTED = 'shell non pris en charge, lecture via bash';
+const BEGIN = '__CLAUDE_DECK_NAMES_BEGIN__';
+const FIN = '__CLAUDE_DECK_NAMES_END__';
+const ZSH_EXPR = 'print -rl -- ${(k)parameters[(R)*export*]}';
+// The bash listing command as it was before the macOS work.
+const BASH_LIST_CMD_HEAD = "printf '%s\\n' __CLAUDE_DECK_NAMES_BEGIN__ >&3; compgen -e >&3 || exit 1; printf '%s\\n' __CLAUDE_DECK_NAMES_END__ >&3";
+
+// process.platform for the duration of fn (the module reads it at call time).
+async function onPlatform(name, fn) {
+  const saved = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: name, configurable: true });
+  try { return await fn(); } finally { Object.defineProperty(process, 'platform', saved); }
+}
+// os.userInfo() pointing at a throwaway HOME, so a real shell never reads the real user's rc files.
+async function inHome(home, fn) {
+  const saved = os.userInfo;
+  os.userInfo = () => ({ username: 'probe', homedir: home, shell: '/bin/sh' });
+  try { return await fn(); } finally { os.userInfo = saved; }
+}
+function tmpHome(rcName, rcBody) {
+  const h = fs.mkdtempSync(path.join(TMP, 'home-'));
+  if (rcName) fs.writeFileSync(path.join(h, rcName), rcBody);
+  return h;
+}
+// A shell named `base` in its own folder that records its arguments (one per line) in `<path>.args`, then runs `body`.
+function recordingShell(base, folder, body) {
+  const dir = path.join(TMP, folder);
+  fs.mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, base);
+  fs.writeFileSync(p, `#!/bin/bash\nprintf '%s\\n' "$@" > '${p}.args'\n${body}`, { mode: 0o755 });
+  return p;
+}
+const argsOf = (p) => fs.readFileSync(`${p}.args`, 'utf8').split('\n').slice(0, -1);
+function realZsh() {
+  if (process.platform === 'darwin' && fs.existsSync('/bin/zsh')) return '/bin/zsh';
+  const r = spawnSync('/bin/sh', ['-c', 'command -v zsh'], { encoding: 'utf8' });
+  const p = String(r.stdout || '').trim();
+  return r.status === 0 && path.isAbsolute(p) ? p : null;
+}
 
 async function run() {
   await app.whenReady();
@@ -175,7 +249,7 @@ async function run() {
     assert.ok(!dumped.includes(FAKE) && !dumped.includes(FAKE_HOME), 'a process.env value reached the outer env');
     const lines = dumped.split('\n');
     assert.ok(lines.includes('USER=') && lines.includes('LOGNAME=') && lines.includes('HOME='), 'USER / LOGNAME / HOME are not empty when there is no passwd entry');
-    assert.ok(lines.includes('PATH=/usr/local/bin:/usr/bin:/bin') && lines.includes(`SHELL=${sh}`), 'PATH / SHELL are not the constants');
+    assert.ok(lines.includes(`PATH=${WANT_PATH}`) && lines.includes(`SHELL=${sh}`), 'PATH / SHELL are not the constants');
   });
 
   await gate('det-one', 'one match -> pre-filled', async () => {
@@ -252,7 +326,8 @@ async function run() {
   await gate('routing', 'allowlist: bash as given; any other shell (zsh, fish, sh, dash, ksh, mksh, ...) is read through /bin/bash with a note', async () => {
     const r = access.listingShell;
     const others = ['/usr/bin/zsh', '/bin/fish', '/usr/bin/tcsh', '/bin/sh', '/bin/dash', '/usr/bin/ksh', '/usr/bin/mksh', '/usr/bin/ash', '/usr/bin/rbash', '/opt/bash/sh', FIXTURE];
-    for (const sh of others) assert.deepStrictEqual([r(sh).shell, r(sh).note], ['/bin/bash', 'shell non pris en charge, lecture via bash'], sh);
+    // darwin accepts a zsh that exists (pa-zsh-* gates); every other shell, and zsh elsewhere, goes through bash
+    for (const sh of others.filter((s) => !(process.platform === 'darwin' && path.basename(s) === 'zsh'))) assert.deepStrictEqual([r(sh).shell, r(sh).note], ['/bin/bash', 'shell non pris en charge, lecture via bash'], sh);
     for (const sh of ['/usr/bin/bash', '/bin/bash', plain]) assert.deepStrictEqual([r(sh).shell, r(sh).note], [sh, null], sh);
     assert.deepStrictEqual([r('').shell, r(undefined).shell, r('').note, r(null).note], ['/bin/bash', '/bin/bash', null, null]);
   });
@@ -274,9 +349,119 @@ async function run() {
     assert.deepStrictEqual([r.ok, r.error, r.reason], [false, ERROR_FR, 'incomplete'], JSON.stringify(r));
   });
 
+  await gate('pa-zsh-list', 'a real zsh lists the names exported from ~/.zshrc, no unsupported note (darwin; Linux when zsh is installed, darwin stubbed)', async () => {
+    const zsh = realZsh();
+    if (!zsh) skip('no zsh binary on this machine (/bin/zsh on macOS, command -v zsh elsewhere): the zsh-native listing is proved on macOS only');
+    const home = tmpHome('.zshrc', 'export DECK_FAKE_ZSH=1\n');
+    const r = await onPlatform('darwin', () => inHome(home, () => listNames(zsh)));
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.ok(r.names.includes('DECK_FAKE_ZSH'), `DECK_FAKE_ZSH missing: ${JSON.stringify(r.names)}`);
+    assert.ok(r.names.includes('HOME') && r.names.includes('PATH'), 'the zsh listing misses HOME / PATH');
+    assert.strictEqual(r.note, null, `the zsh listing was routed through bash: ${r.note}`);
+  });
+
+  await gate('pa-zsh-fake', 'darwin: a zsh-named shell runs -ic with the zsh-native listing inside the fence; its output is parsed like a bash one', async () => {
+    const z = recordingShell('zsh', 'fake-zsh', `printf '%s\\n' 'rc noise' ${BEGIN} DECK_FAKE_ZSH PATH PATH 'bad name' 9X '' ${FIN} >&3\n`);
+    const r = await onPlatform('darwin', () => inHome(tmpHome(), () => listNames(z)));
+    assert.ok(fs.existsSync(`${z}.args`), `the zsh shell was never run, routed elsewhere: ${JSON.stringify({ ok: r.ok, note: r.note })}`);
+    const args = argsOf(z);
+    assert.strictEqual(args.length, 2, JSON.stringify(args));
+    assert.strictEqual(args[0], '-ic');
+    const cmd = args[1];
+    assert.ok(cmd.includes(ZSH_EXPR), `no zsh-native listing in: ${cmd}`);
+    assert.ok(cmd.indexOf(BEGIN) >= 0 && cmd.indexOf(BEGIN) < cmd.indexOf(ZSH_EXPR) && cmd.indexOf(ZSH_EXPR) < cmd.indexOf(FIN), 'the listing is not inside the fence');
+    assert.ok(!cmd.includes('compgen'), 'a bash builtin reached the zsh command');
+    assert.strictEqual(cmd.split('>&3').length - 1, 3, 'every fence part and the listing go to fd 3');
+    assert.deepStrictEqual([r.ok, r.names, r.note], [true, ['DECK_FAKE_ZSH', 'PATH'], null], JSON.stringify(r));
+  });
+
+  await gate('pa-zsh-fallback', 'darwin: a zsh whose listing fails -> the /bin/bash listing and the unsupported note', async () => {
+    const z = recordingShell('zsh', 'failing-zsh', 'exit 1\n');
+    const r = await onPlatform('darwin', () => inHome(tmpHome(), () => listNames(z)));
+    assert.deepStrictEqual([r.ok, r.note], [true, UNSUPPORTED], JSON.stringify(r));
+    assert.ok(r.names.includes('PATH') && r.names.includes('HOME'), `names read through bash expected, got ${JSON.stringify(r.names)}`);
+  });
+
+  await gate('pa-zsh-absent', 'a zsh path that does not exist -> the /bin/bash fallback and the unsupported note, on both platforms', async () => {
+    const gone = '/nonexistent/zsh';
+    for (const plat of ['darwin', 'linux']) {
+      await onPlatform(plat, async () => {
+        const s = access.listingShell(gone);
+        assert.deepStrictEqual([s.shell, s.note], ['/bin/bash', UNSUPPORTED], plat);
+        const r = await inHome(tmpHome(), () => listNames(gone));
+        assert.deepStrictEqual([r.ok, r.note], [true, UNSUPPORTED], `${plat}: ${JSON.stringify(r)}`);
+        assert.ok(r.names.includes('PATH'), `${plat}: names read through bash expected`);
+      });
+    }
+  });
+
+  await gate('pa-zsh-linux', 'linux: zsh keeps the /bin/bash fallback and the unsupported note; a runnable zsh is never started', async () => {
+    if (process.platform === 'darwin') skip('darwin accepts zsh (see pa-zsh-list)');
+    const z = recordingShell('zsh', 'linux-zsh', 'exit 0\n');
+    for (const sh of ['/bin/zsh', '/usr/bin/zsh', z]) {
+      const s = access.listingShell(sh);
+      assert.deepStrictEqual([s.shell, s.note], ['/bin/bash', UNSUPPORTED], sh);
+    }
+    const r = await inHome(tmpHome(), () => listNames(z));
+    assert.deepStrictEqual([r.ok, r.note], [true, UNSUPPORTED], JSON.stringify(r));
+    assert.ok(!fs.existsSync(`${z}.args`), 'a zsh shell was started on linux');
+  });
+
+  await gate('pa-bash-unchanged', 'SHELL=/bin/bash: same routing, command and args as before; the listing holds a .bashrc export', async () => {
+    assert.deepStrictEqual(access.listingShell('/bin/bash'), { shell: '/bin/bash', note: null });
+    const rec = recordingShell('bash', 'argv-bash', 'exec /bin/bash --norc "$@"\n');
+    assert.strictEqual((await listNames(rec)).ok, true);
+    assert.deepStrictEqual(argsOf(rec), ['-ic', BASH_LIST_CMD_HEAD]);
+    const home = tmpHome('.bashrc', 'export DECK_FAKE_BASHRC=1\n');
+    const r = await inHome(home, () => listNames('/bin/bash'));
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.ok(r.names.includes('DECK_FAKE_BASHRC'), `DECK_FAKE_BASHRC missing: ${JSON.stringify(r.names)}`);
+    assert.strictEqual(r.note, null);
+  });
+
+  await gate('pa-outer-path', 'OUTER_PATH (access and runner): Homebrew first on darwin, the previous value on linux', async () => {
+    const accessPath = (plat) => onPlatform(plat, async () => {
+      const sh = dumpShell(`path-${plat}`);
+      assert.strictEqual((await listNames(sh)).ok, true);
+      return fs.readFileSync(`${sh}.env`, 'utf8').split('\n').find((l) => l.startsWith('PATH=')).slice(5);
+    });
+    // The runner holds OUTER_PATH as a constant read at load: load a fresh copy under each platform, capture the spawn env.
+    const runnerFile = path.join(SRC, 'plugin-runner.js');
+    const runnerPath = async (plat) => {
+      const dir = path.join(fs.mkdtempSync(path.join(TMP, `runner-${plat}-`)), 'p', 'reports');
+      fs.mkdirSync(dir, { recursive: true });
+      const reports = { newEntry: () => ({ stem: 's1', reportPath: path.join(dir, 's1.html'), logPath: path.join(dir, 's1.log') }), finishEntry() {}, setPid() {}, latest: () => null };
+      const mod = await onPlatform(plat, () => { delete require.cache[runnerFile]; return require(runnerFile); });
+      delete require.cache[runnerFile];
+      const realSpawn = cp.spawn;
+      let seen = null;
+      cp.spawn = (cmd, args, opts) => {
+        seen = opts.env.PATH;
+        const c = new EventEmitter();
+        c.pid = undefined;
+        c.unref = () => {};
+        setImmediate(() => c.emit('exit', 0, null));
+        return c;
+      };
+      try {
+        const r = mod.create({ reports, validName, shellPath: '/bin/bash' }).run({ id: 'p', dir, argv: ['/bin/true'] }, {}, 'auto', {});
+        assert.strictEqual(r.ok, true, JSON.stringify(r));
+      } finally { cp.spawn = realSpawn; }
+      return seen;
+    };
+    const same = (got, want, label) => assert.ok(got === want, `${label}: PATH=${got}`);
+    same(await accessPath('darwin'), DARWIN_PATH, 'access, darwin');
+    same(await accessPath('linux'), HEAD_PATH, 'access, linux');
+    same(await runnerPath('darwin'), DARWIN_PATH, 'runner, darwin');
+    same(await runnerPath('linux'), HEAD_PATH, 'runner, linux');
+    assert.ok(DARWIN_PATH.split(':').includes('/opt/homebrew/bin'), 'control: the expected darwin value holds Homebrew');
+  });
+
   const bad = results.filter((r) => !r.ok);
-  origLog(bad.length ? `VERDICT: FAILED (${results.length - bad.length}/${results.length}) ${bad.map((r) => r.name).join(' ')}`
-    : `VERDICT: ALL GREEN (${results.length}/${results.length})`);
+  const ran = results.filter((r) => !r.skipped).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  origLog(bad.length ? `VERDICT: FAILED (${ran - bad.length}/${ran}) ${bad.map((r) => r.name).join(' ')}`
+    : `VERDICT: ALL GREEN (${ran}/${ran})${skipped ? ` + ${skipped} skipped` : ''}`);
   try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) { /* tmp stays */ }
   app.exit(bad.length ? 1 : 0);
 }
