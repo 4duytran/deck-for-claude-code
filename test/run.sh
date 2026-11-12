@@ -49,21 +49,56 @@ trap 'rm -rf "$CLAUDE_DECK_PLUGINS_DIR"' EXIT
 PROBES="auto-refresh-probe card-icons-probe sidebar-style-probe goal-button-probe goal-footer-probe compact-slash-probe deferred-rename-probe display-integrity-probe estimator-probe git-panel-probe hidden-output-probe hybrid-merge-probe inject-probe mode-switch-probe named-session-probe plans-panel-probe reclick-noop-probe scroll-heal-probe shell-env-probe zoom-probe sidebar-agents-probe agent-journal-probe project-order-probe session-activity-probe paste-dedup-probe send-single-write-probe send-trace-probe send-stuck-retry-probe price-feed-probe commands-feed-probe slash-picker-probe commands-list-probe slash-send-probe html-page-probe html-view-probe git-log-probe plugin-host-probe plugin-manifest-probe plugin-access-probe plugin-runner-probe plugin-reports-probe plugin-install-probe plugin-page-serve-probe plugin-link-open-probe plugin-options-manifest-probe plugin-options-state-probe plugin-options-run-probe plugin-options-ipc-probe plugin-options-ui-probe plugin-journal-probe plugin-view-full-probe plugin-stop-probe plugin-nav-probe plugin-motion-probe plugin-flash-probe diff-expand-probe diff-expand-ipc-probe diff-gap-rows-probe plans-view-full-probe sidebar-epure-probe header-toolbar-probe files-view-full-probe refresh-spin-probe config-surface-probe boot-clean-probe room-mirror-probe room-mirror-router-probe room-inbound-settings-probe room-mirror-flag-probe room-native-name-probe agent-lifecycle-seed-probe agent-closed-session-probe agent-resume-probe feed-agent-state-probe chat-agent-state-probe agent-waiting-style-probe agent-three-consumer-probe agent-k6-states-probe agent-memo-session-probe agent-meta-session-probe agent-process-boundary-probe session-liveness-probe agent-lifecycle-core-probe agent-own-evidence-probe feed-liveness-lazy-probe agent-reopen-flash-probe"
 [ $# -gt 0 ] && PROBES="$*"
 
+# A probe that never answers SIGTERM must not hang the sweep (on macOS an app-modal alert blocks the
+# main process, so the signal is never served): TERM at PROBE_LIMIT seconds, KILL KILL_GRACE seconds later.
+PROBE_LIMIT=180
+KILL_GRACE=10
+
+# pt_tree <pid>: the pid and all its descendants (pgrep -P exists on Linux and macOS).
+pt_tree() {
+  local c
+  echo "$1"
+  for c in $(pgrep -P "$1" 2>/dev/null); do pt_tree "$c"; done
+}
+
 # GNU `timeout` is absent on macOS: coreutils' gtimeout when installed, else a bash 3.2 watchdog.
-# run_limited <seconds> <command...>; exit status 124 on expiry, like GNU timeout.
+# run_limited <seconds> <command...>; exit status 124 on expiry, like GNU timeout. On expiry the command
+# gets TERM, then KILL after KILL_GRACE seconds, and the whole process tree dies: the electron CLI is a node
+# parent of the Electron main, and `timeout -k` kills only its direct child (measured: a grandchild survives).
 run_limited() {
-  if command -v timeout >/dev/null; then timeout "$@"; return $?; fi
-  if command -v gtimeout >/dev/null; then gtimeout "$@"; return $?; fi
-  local secs=$1 pid wd rc
+  local secs=$1 pid wd rc t0 tool=
   shift
+  if command -v timeout >/dev/null; then tool=timeout
+  elif command -v gtimeout >/dev/null; then tool=gtimeout
+  fi
+  if [ -n "$tool" ]; then
+    t0=$SECONDS
+    "$tool" -k "$KILL_GRACE" "$secs" "$@" &
+    pid=$!
+    wait "$pid"; rc=$?
+    # timeout answers 137 instead of 124 once its KILL was needed.
+    [ "$rc" = 137 ] && [ $((SECONDS - t0)) -ge "$secs" ] && rc=124
+    # timeout leads its own process group (pgid = its pid): KILL what its command left in it.
+    [ "$rc" = 124 ] && kill -s KILL -- "-$pid" 2>/dev/null
+    return $rc
+  fi
   "$@" &
   pid=$!
   (
     fired=0
     sleep "$secs" >/dev/null 2>&1 &
     sp=$!
-    trap '[ "$fired" = 1 ] && exit 124; kill "$sp" 2>/dev/null; exit 0' TERM
-    wait "$sp" && { fired=1; kill -TERM "$pid" 2>/dev/null; exit 124; }
+    # After expiry the watchdog finishes its kill sequence: a TERM from the main flow must not stop it.
+    trap '[ "$fired" = 1 ] || { kill "$sp" 2>/dev/null; exit 0; }' TERM
+    if wait "$sp"; then
+      fired=1
+      tree=$(pt_tree "$pid")
+      kill -TERM "$pid" 2>/dev/null
+      n=0
+      while [ "$n" -lt "$KILL_GRACE" ] && kill -0 "$pid" 2>/dev/null; do sleep 1; n=$((n+1)); done
+      for p in $tree $(pt_tree "$pid"); do kill -KILL "$p" 2>/dev/null; done
+      exit 124
+    fi
   ) &
   wd=$!
   wait "$pid"; rc=$?
@@ -80,8 +115,13 @@ for pr in $PROBES; do
     FAIL=$((FAIL+1)); FAILED="$FAILED $pr(missing)"; echo "BAD  $pr | no such probe: test/$pr.js"
     continue
   fi
-  run_limited 180 node_modules/.bin/electron "test/$pr.js" > "test/$pr.out" 2>&1
+  run_limited "$PROBE_LIMIT" node_modules/.bin/electron "test/$pr.js" > "test/$pr.out" 2>&1
   rc=$?
+  if [ "$rc" = 124 ]; then
+    # Also reap an Electron process that left the killed tree, then say why the probe ended.
+    pkill -KILL -f "test/$pr\\.js" 2>/dev/null
+    echo "TIMEOUT $pr after ${PROBE_LIMIT}s (killed)" >> "test/$pr.out"
+  fi
   # Gates a probe skipped on this machine (`SKIP <gate-id> ...` lines of THIS run's output).
   for g in $(grep -E "^SKIP " "test/$pr.out" | cut -d' ' -f2); do SKIPPED="$SKIPPED $pr:$g"; done
   v=$(grep -cE "^FAIL " "test/$pr.out")

@@ -44,6 +44,17 @@ jobs:
         run: |
           for f in main.js preload.js $(find src/main -name '*.js') bin/*.js; do node --check "$f" || exit 1; done
 
+      # The hosted macOS runner has no Claude Code. A missing `claude` makes the boot preflight open a
+      # dialog with no parent window, which is app-modal on macOS: it blocks the main process, so the
+      # probe neither runs nor shuts down. The check only needs an executable named `claude` on PATH.
+      - name: Stub claude CLI
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/stub-bin"
+          printf '#!/bin/sh\necho "claude 0.0.0 (CI stub)"\n' > "$RUNNER_TEMP/stub-bin/claude"
+          chmod +x "$RUNNER_TEMP/stub-bin/claude"
+          echo "$RUNNER_TEMP/stub-bin" >> "$GITHUB_PATH"
+
       - name: Smoke probe
         continue-on-error: true
         run: bash test/run.sh boot-clean-probe
