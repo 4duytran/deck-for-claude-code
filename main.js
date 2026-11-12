@@ -169,7 +169,11 @@ function startPerfReport() {
 
 app.whenReady().then(() => {
   startPerfReport();
-  Menu.setApplicationMenu(null); // no native File/Edit/View/Window/Help bar
+  // No native File/Edit/View/Window/Help bar, except on macOS: a null menu there removes the Edit roles,
+  // so Cmd+C / Cmd+V / Cmd+A / Cmd+Q stop working (electron#49807).
+  Menu.setApplicationMenu(process.platform === 'darwin'
+    ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
+    : null);
   // Pre-warm the login-shell env snapshot (memoized) so the FIRST pane-open
   // already has the user's ~/.bashrc exports (MCP secrets) without paying the
   // shell hop on the click path. Fire-and-forget: pty-open awaits it regardless.
