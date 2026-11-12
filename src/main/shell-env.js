@@ -22,12 +22,14 @@
 
 const { execFile } = require('child_process');
 
-// -i (interactive, NON-login) deliberately, NOT -l: a Linux terminal emulator
+// Linux: -i (interactive, NON-login) deliberately, NOT -l: a terminal emulator
 // opens interactive non-login shells, which read ~/.bashrc — exactly where the
 // user keeps their `export` lines. An interactive LOGIN shell (-l) would
 // read ~/.bash_profile instead and MISS ~/.bashrc unless it chains the two, so
 // -i alone is the faithful mirror of "what works in my terminal" on Linux.
-// (A macOS port, where Terminal.app opens login shells, would add -l.)
+// macOS: Terminal.app / iTerm open LOGIN shells, and Homebrew's PATH
+// (/opt/homebrew/bin) usually lives in ~/.zprofile, so a Dock launch needs -l -i.
+// With bash as the login shell that reads ~/.bash_profile, not ~/.bashrc.
 const BEGIN = '__CLAUDE_DECK_ENV_BEGIN__';
 const END = '__CLAUDE_DECK_ENV_END__';
 // `env -0` NUL-delimits entries (coreutils) so a value containing a newline
@@ -88,7 +90,7 @@ function doResolve() {
     try {
       child = execFile(
         shell,
-        ['-i', '-c', SNAPSHOT_CMD],
+        process.platform === 'darwin' ? ['-l', '-i', '-c', SNAPSHOT_CMD] : ['-i', '-c', SNAPSHOT_CMD],
         {
           // stdin from /dev/null so an interactive shell can't block on a read;
           // stderr CAPTURED (not ignored) so a fallback can report the cause.
