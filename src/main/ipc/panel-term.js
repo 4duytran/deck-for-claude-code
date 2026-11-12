@@ -103,7 +103,10 @@ function registerPanelTermIpc() {
       // node-pty forks first and a failing exec only exits with 1: refuse a shell that is not a regular
       // executable file (resolveBin checks X_OK and searches PATH), or it would read as a normal exit
       if (!shell || !fs.statSync(shell).isFile()) return { ok: false, reason: 'spawn' };
-      proc = pty.spawn(shell, [],{ name: 'xterm-256color', cols, rows, cwd, env: terminalEnv() });
+      // macOS: a Dock-launched app has no Homebrew PATH and a non-login zsh skips ~/.zprofile, so the shell
+      // starts as a login shell (`-l`, accepted by zsh and bash); Linux keeps its empty argument list.
+      const args = process.platform === 'darwin' ? ['-l'] : [];
+      proc = pty.spawn(shell, args, { name: 'xterm-256color', cols, rows, cwd, env: terminalEnv() });
     } catch (_) { return { ok: false, reason: 'spawn' }; }
     const entry = { termId, proc, cwd, outBuf: '', outTimer: null, lastSentAt: 0, silent: false };
     terms.set(termId, entry);

@@ -390,7 +390,10 @@ function registerPtyIpc() {
   // alacritty-style PRIMARY selection bridge (Linux): every xterm selection is
   // pushed to the X11 PRIMARY buffer. The paste half is native — Chromium
   // pastes PRIMARY on middle-click by itself. Fail-silent off-X11.
+  // Electron documents 'selection' as Linux-only: elsewhere it is a no-op by design, so a
+  // selection never risks overwriting the system clipboard.
   ipcMain.on('primary-write', (_e, text) => {
+    if (process.platform !== 'linux') return;
     if (typeof text === 'string' && text) {
       try { clipboard.writeText(text, 'selection'); } catch (_) { /* no PRIMARY */ }
     }
