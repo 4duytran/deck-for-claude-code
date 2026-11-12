@@ -19,7 +19,7 @@ export const XTERM_THEME = {
 };
 
 export const MONO_FONT =
-  '"JetBrainsMono Nerd Font", "JetBrains Mono", "Fira Code", "Cascadia Code", monospace';
+  '"JetBrainsMono Nerd Font", "JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", Menlo, monospace';
 
 // Live session status, fed by Claude Code hooks via ~/.claude/deck-status/.
 // Labels are the French words of the sidebar subtitle; the dot is drawn by CSS.

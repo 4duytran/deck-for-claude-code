@@ -6,6 +6,8 @@
 // Gate: 0 errors. BOOT_CLEAN_BASELINE=<file> (optional, no default) names a set of known messages, one normalized
 // message per line; later runs gate on "no error outside that set". BOOT_CLEAN_RECORD=1 together with
 // BOOT_CLEAN_BASELINE=<file> writes the messages seen to that file; without the file it is ignored.
+// Gate mono-mac-fallback: MONO_FONT of the booted renderer (theme.js, the xterm fontFamily) lists Menlo before the
+// generic monospace and keeps every family it listed before the macOS fallback, in the same relative order.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -14,6 +16,8 @@ const { app } = require('electron');
 const BASELINE_FILE = process.env.BOOT_CLEAN_BASELINE || '';
 const SETTLE_MS = 5000;
 const norm = (m) => String(m).replace(/\s+/g, ' ').trim().slice(0, 300);
+// The MONO_FONT families before the macOS fallback was added; none may disappear or be reordered.
+const HEAD_MONO = ['JetBrainsMono Nerd Font', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'monospace'];
 
 const BASE = fs.mkdtempSync(path.join(os.tmpdir(), 'deck-boot-clean-'));
 process.env.HOME = BASE;
@@ -34,13 +38,30 @@ delete process.env.SLACK_USER_TOKEN;
 const errors = [];
 let loaded = false;
 let finished = false;
+let mainWc = null;
 const record = process.env.BOOT_CLEAN_RECORD === '1' && BASELINE_FILE !== '';
 const known = new Set();
 if (!record) {
   try { for (const l of fs.readFileSync(BASELINE_FILE, 'utf8').split('\n')) if (l.trim()) known.add(l.trim()); } catch (_) { /* no baseline: gate on 0 */ }
 }
 
-function finish() {
+// MONO_FONT as the booted renderer holds it: theme.js is already in its module graph, so the import is the same instance.
+async function readMonoFont() {
+  if (!mainWc || mainWc.isDestroyed()) return null;
+  const read = mainWc.executeJavaScript("import('./js/theme.js').then((m) => m.MONO_FONT)").catch(() => null);
+  return Promise.race([read, new Promise((resolve) => setTimeout(() => resolve(null), 5000))]);
+}
+
+function monoMacFallback(value) {
+  if (typeof value !== 'string') return false;
+  const fams = value.split(',').map((f) => f.trim().replace(/^["']|["']$/g, ''));
+  const head = HEAD_MONO.map((f) => fams.indexOf(f));
+  const headKept = head.every((i, k) => i !== -1 && (k === 0 || i > head[k - 1]));
+  const menlo = fams.indexOf('Menlo');
+  return headKept && menlo !== -1 && menlo < fams.indexOf('monospace');
+}
+
+async function finish() {
   if (finished) return;
   finished = true;
   const out = errors.filter((e) => !known.has(e));
@@ -50,11 +71,14 @@ function finish() {
     fs.writeFileSync(BASELINE_FILE, errors.length ? `${[...new Set(errors)].join('\n')}\n` : '');
     process.stdout.write(`RECORDED ${new Set(errors).size} distinct error(s) to ${BASELINE_FILE}\n`);
   }
+  const monoFont = await readMonoFont();
   const gates = {
     window_loaded: loaded,
     no_error_level_console_message: record ? true : out.length === 0,
+    'mono-mac-fallback': monoMacFallback(monoFont),
   };
   process.stdout.write(`INFO error-level events=${errors.length} baseline-set=${known.size} outside-baseline=${out.length}\n`);
+  process.stdout.write(`INFO mono-font=${JSON.stringify(monoFont)}\n`);
   const bad = Object.keys(gates).filter((g) => !gates[g]);
   for (const g of Object.keys(gates)) process.stdout.write(`${gates[g] ? 'PASS' : 'FAIL'} ${g}\n`);
   process.stdout.write(bad.length === 0 ? `VERDICT: ALL GREEN (${Object.keys(gates).length}/${Object.keys(gates).length})\n`
@@ -71,7 +95,7 @@ app.on('web-contents-created', (_e, wc) => {
     if (level === 'error' || level === 3) errors.push(norm(message));
   });
   if (wc.getType() === 'window') {
-    wc.once('did-finish-load', () => { loaded = true; setTimeout(finish, SETTLE_MS); });
+    wc.once('did-finish-load', () => { loaded = true; if (!mainWc) mainWc = wc; setTimeout(finish, SETTLE_MS); });
   }
 });
 setTimeout(finish, 60000).unref(); // never hang: window_loaded fails if the load never came
