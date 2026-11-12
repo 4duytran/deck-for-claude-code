@@ -53,8 +53,22 @@ async function until(fn, ms, what) {
     await sleep(20);
   }
 }
-const cmdline = (pid) => { try { return fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0'); } catch { return []; } };
-const postExec = (pid) => { const c = cmdline(pid); return c.includes(ARGV0) && /python3$/.test(c[0] || ''); };
+// Process inspection without /proc (macOS has none): /proc on linux, `ps` on darwin; liveness is signal 0 on both.
+// A darwin word is a space-separated token of the ps line, so a path holding a space splits there.
+const kill0 = process.kill.bind(process); // taken before a probe spy replaces process.kill
+const IS_DARWIN = process.platform === 'darwin';
+const psOut = (args) => { try { return cp.execFileSync('ps', args, { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } };
+const alive = (pid) => { try { kill0(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const cmdline = (pid) => {
+  if (!IS_DARWIN) { try { return fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0'); } catch { return []; } }
+  const line = psOut(['-ww', '-o', 'command=', '-p', String(pid)]).replace(/\n+$/, '');
+  return line ? line.split(' ') : [];
+};
+const cmdText = (pid) => cmdline(pid).join(' ');
+const allCmdlines = () => (IS_DARWIN
+  ? psOut(['-axww', '-o', 'pid=,command=']).split('\n').map((l) => /^\s*(\d+) (.*)$/.exec(l)).filter(Boolean).map((m) => ({ pid: Number(m[1]), words: m[2].split(' ') }))
+  : fs.readdirSync('/proc').filter((n) => /^\d+$/.test(n)).map((n) => ({ pid: Number(n), words: cmdline(n) })));
+const postExec =(pid) => { const c = cmdline(pid); return c.includes(ARGV0) && /python3$/.test(c[0] || ''); };
 
 const results = {};
 function gate(name, ok, extra) {
@@ -434,9 +448,57 @@ async function main() {
   A.reports.seed('fake', { pid: live.pid, exit: null });
   gate('pid_remembered_argv0', A.runner.isRunning('fake') === true);
 
+  // ---- ps matcher, the macOS pid guard: procps takes the same `ps -ww -o command= -p <pid>` call, so Linux observes it too ----
+  const { procHolds: procMatch, psHolds: psMatch } = require(path.join(SRC, 'plugin-runner.js')); // the cached module `create` came from
+  const haveMatchers = typeof procMatch === 'function' && typeof psMatch === 'function';
+  if (IS_DARWIN) console.log('SKIP r-ps-equiv — no /proc on darwin');
+  else {
+    const asked = [[live.pid, ARGV0], [live.pid, ARGV0.slice(0, -1)], [live.pid, ARGV0.slice(1)], [other.pid, ARGV0], [dead.pid, ARGV0]];
+    const rows = haveMatchers ? asked.map(([pid, abs]) => [procMatch(pid, abs), psMatch(pid, abs)]) : [];
+    gate('r-ps-equiv', haveMatchers && rows[0][0] === true && rows.slice(1).every(([p]) => p === false) && rows.every(([p, s]) => p === s), JSON.stringify(rows));
+  }
+  const SP_DIR = path.join(fs.realpathSync(TMP), 'dir with space');
+  const SP_FILE = path.join(SP_DIR, 'run.sh'); // a shell fixture, not run.py: run.py reads /proc/self/environ, which macOS lacks
+  fs.mkdirSync(SP_DIR, { recursive: true });
+  fs.writeFileSync(SP_FILE, '#!/bin/sh\n/bin/sleep 8\nexit 0\n', { mode: 0o755 });
+  const spaced = foreign([SP_FILE], { PATH: OUTER_PATH });
+  const sleeper = foreign(['/bin/sleep', '8'], { PATH: OUTER_PATH });
+  await until(() => cmdText(spaced.pid).includes(SP_FILE) && /sleep/.test(cmdText(sleeper.pid)), 5000, 'spaced fixture and foreign sleep up');
+  const spRows = haveMatchers ? {
+    held: psMatch(spaced.pid, SP_FILE), foreignPid: psMatch(sleeper.pid, SP_FILE), noLeading: psMatch(spaced.pid, SP_FILE.slice(1)),
+    noTrailing: psMatch(spaced.pid, SP_FILE.slice(0, -1)), dead: psMatch(dead.pid, SP_FILE),
+  } : {};
+  gate('r-ps-darwin', haveMatchers && spRows.held === true && spRows.foreignPid === false && spRows.noLeading === false && spRows.noTrailing === false && spRows.dead === false, JSON.stringify(spRows));
+
+  // the darwin branch of pidHolds itself, with `ps` swapped for a script on PATH: the answer must come from ps, never from /proc
+  const FAKE_BIN = path.join(fs.realpathSync(TMP), 'fakebin');
+  const ARGS_FILE = path.join(FAKE_BIN, 'args');
+  fs.mkdirSync(FAKE_BIN, { recursive: true });
+  fs.writeFileSync(path.join(FAKE_BIN, 'ps'), `#!/bin/sh\necho "$*" > "$FAKE_PS_ARGS"\nprintf '%s\\n' "$FAKE_PS_LINE"\n`, { mode: 0o755 });
+  const platformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+  const askFake = (platform, line, pid) => { // synchronous: nothing else runs while process.platform and PATH are swapped
+    const keys = ['PATH', 'FAKE_PS_LINE', 'FAKE_PS_ARGS'];
+    const saved = keys.map((k) => process.env[k]);
+    Object.defineProperty(process, 'platform', { ...platformDesc, value: platform });
+    Object.assign(process.env, { PATH: `${FAKE_BIN}:${saved[0]}`, FAKE_PS_LINE: line, FAKE_PS_ARGS: ARGS_FILE });
+    try {
+      const R = mk();
+      R.reports.seed('fake', { pid, exit: null });
+      return R.runner.isRunning('fake', { id: 'fake', dir: SP_DIR, argv: ['run.sh'], argv0Abs: SP_FILE, env: [] });
+    } finally {
+      Object.defineProperty(process, 'platform', platformDesc);
+      keys.forEach((k, i) => { if (saved[i] === undefined) delete process.env[k]; else process.env[k] = saved[i]; });
+    }
+  };
+  const viaPs = askFake('darwin', `/bin/sh ${SP_FILE} arg`, sleeper.pid); // ps says held, /proc says a bare sleep
+  let psArgs = '';
+  try { psArgs = fs.readFileSync(ARGS_FILE, 'utf8').trim(); } catch { /* ps was never asked */ }
+  const psVeto = askFake('darwin', '/bin/sleep 8', spaced.pid); // ps says foreign, /proc says held
+  const viaProc = askFake('linux', `/bin/sh ${SP_FILE} arg`, sleeper.pid); // not darwin: /proc only
+  gate('r-ps-dispatch', viaPs === true && psArgs === `-ww -o command= -p ${sleeper.pid}` && psVeto === false && viaProc === false, JSON.stringify({ viaPs, psArgs, psVeto, viaProc }));
+
   // ---- K2 stop: the plugin's own process group, signalled only while the pid passes the cmdline guard -----------------
   const STOP_DIR = path.join(fs.realpathSync(TMP), 'stop');
-  const alive = (pid) => fs.existsSync(`/proc/${pid}`);
   const gone = (pid) => until(() => !alive(pid), 3000, `pid ${pid} gone`);
   const stopPlugin = (name, body) => { // a fake plugin built in the probe TMP
     const dir = path.join(STOP_DIR, name);
@@ -448,9 +510,9 @@ async function main() {
   const fileOf = (c, name) => path.join(c.reports.root, 'fake', name);
   const upFile = (c) => until(() => fs.existsSync(fileOf(c, 'up')), 5000, 'fake plugin up');
   const reapFixtures = () => { // leftovers of a red run: only processes whose cmdline names this probe's own stop folder
-    for (const name of fs.readdirSync('/proc')) {
-      if (!/^\d+$/.test(name) || !cmdline(name).some((w) => w.includes(STOP_DIR))) continue;
-      for (const target of [-Number(name), Number(name)]) { try { realKill(target, 'SIGKILL'); } catch { /* not a leader, or gone */ } }
+    for (const { pid, words } of allCmdlines()) {
+      if (!words.some((w) => w.includes(STOP_DIR))) continue;
+      for (const target of [-pid, pid]) { try { realKill(target, 'SIGKILL'); } catch { /* not a leader, or gone */ } }
     }
   };
   const realKill = process.kill.bind(process);

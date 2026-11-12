@@ -79,10 +79,25 @@ function pickShell(shellPath) {
   return { file: shellPath, fallback: false };
 }
 
-// pid-reuse guard: alive AND its /proc cmdline holds the plugin's absolute argv0 (the pid survives the exec chain).
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// The two matchers behind pidHolds, exported for the probes. Linux reads the exact argv words of /proc/<pid>/cmdline.
+// macOS has no /proc: `ps` prints one command line, so argv0 must sit in it between a space (or the line start) and a
+// space (or the line end), which keeps a path holding spaces one unit. Any error means no match.
+function procHolds(pid, argv0Abs) {
+  try { return fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').includes(argv0Abs); } catch { return false; }
+}
+function psHolds(pid, argv0Abs) {
+  try {
+    const line = cp.execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8', timeout: 1000, stdio: ['ignore', 'pipe', 'ignore'] });
+    return new RegExp(`(^| )${escapeRe(argv0Abs)}( |$)`).test(line.replace(/\n+$/, ''));
+  } catch { return false; }
+}
+
+// pid-reuse guard: alive AND its command line holds the plugin's absolute argv0 (the pid survives the exec chain).
 function pidHolds(pid, argv0Abs) {
   try { process.kill(pid, 0); } catch (e) { if (e.code !== 'EPERM') return false; }
-  try { return fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').includes(argv0Abs); } catch { return false; }
+  return process.platform === 'darwin' ? psHolds(pid, argv0Abs) : procHolds(pid, argv0Abs);
 }
 
 // The realpath the manifest validated when the descriptor carries it (a symlink retargeted since the scan is not
@@ -242,4 +257,4 @@ function create({ reports, onExit, nowFn = Date.now, shellPath, baseNames = [], 
   return { run, isRunning, runningStem, stop };
 }
 
-module.exports = { create };
+module.exports = { create, procHolds, psHolds };

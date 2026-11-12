@@ -114,15 +114,26 @@ async function until(fn, ms, what) {
   }
 }
 const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const cmdlineOf = (pid) => { try { return fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0'); } catch { return []; } };
-const gone = (pid) => until(() => !fs.existsSync(`/proc/${pid}`), 3000, `pid ${pid} gone`);
+// Process inspection without /proc (macOS has none): /proc on linux, `ps` on darwin; liveness is signal 0 on both.
+// A darwin word is a space-separated token of the ps line.
+const kill0 = process.kill.bind(process);
+const IS_DARWIN = process.platform === 'darwin';
+const psOut = (args) => { try { return require('node:child_process').execFileSync('ps', args, { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return ''; } };
+const alive = (pid) => { try { kill0(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const cmdlineOf = (pid) => {
+  if (!IS_DARWIN) { try { return fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0'); } catch { return []; } }
+  const line = psOut(['-ww', '-o', 'command=', '-p', String(pid)]).replace(/\n+$/, '');
+  return line ? line.split(' ') : [];
+};
+const allCmdlines = () => (IS_DARWIN
+  ? psOut(['-axww', '-o', 'pid=,command=']).split('\n').map((l) => /^\s*(\d+) (.*)$/.exec(l)).filter(Boolean).map((m) => ({ pid: Number(m[1]), words: m[2].split(' ') }))
+  : fs.readdirSync('/proc').filter((n) => /^\d+$/.test(n)).map((n) => ({ pid: Number(n), words: cmdlineOf(n) })));
+const gone = (pid) => until(() => !alive(pid), 3000, `pid ${pid} gone`);
 const spawned = [];
 function reap() { // leftovers of a red run: only processes whose cmdline names this probe's own TMP (never an Electron helper: the booted app owns some)
-  for (const name of fs.readdirSync('/proc')) {
-    if (!/^\d+$/.test(name)) continue;
-    const cmd = cmdlineOf(name);
-    if (!cmd.some((w) => w.includes(TMP)) || cmd.some((w) => w.startsWith('--type=')) || /electron/.test(cmd[0] || '')) continue;
-    for (const target of [-Number(name), Number(name)]) { try { process.kill(target, 'SIGKILL'); } catch { /* not a leader, or gone */ } }
+  for (const { pid, words } of allCmdlines()) {
+    if (!words.some((w) => w.includes(TMP)) || words.some((w) => w.startsWith('--type=')) || /electron/.test(words[0] || '')) continue;
+    for (const target of [-pid, pid]) { try { process.kill(target, 'SIGKILL'); } catch { /* not a leader, or gone */ } }
   }
 }
 
@@ -206,7 +217,6 @@ async function appRun() {
   if (!latest || !Number.isInteger(latest.pid)) throw new Error(`no pid in ${J(latest)}`);
   return { run, pid: latest.pid };
 }
-const alive = (pid) => fs.existsSync(`/proc/${pid}`);
 const goneSoft = (pid) => gone(pid).then(() => true, () => false);
 
 async function appWindow() {
