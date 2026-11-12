@@ -118,8 +118,7 @@ for pr in $PROBES; do
   run_limited "$PROBE_LIMIT" node_modules/.bin/electron "test/$pr.js" > "test/$pr.out" 2>&1
   rc=$?
   if [ "$rc" = 124 ]; then
-    # Also reap an Electron process that left the killed tree, then say why the probe ended.
-    pkill -KILL -f "test/$pr\\.js" 2>/dev/null
+    # run_limited already killed the whole tree; say why the probe ended.
     echo "TIMEOUT $pr after ${PROBE_LIMIT}s (killed)" >> "test/$pr.out"
   fi
   # Gates a probe skipped on this machine (`SKIP <gate-id> ...` lines of THIS run's output).
