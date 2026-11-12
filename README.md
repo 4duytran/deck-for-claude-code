@@ -90,8 +90,9 @@ All screenshots show demo data (fictional projects, people and merge requests).
   environment, so a directly spawned `claude` would miss secrets you export from
   `~/.bashrc` (MCP tokens, for example) and its MCP servers would fail to
   authenticate. `src/main/shell-env.js` resolves your interactive-shell
-  environment once (`$SHELL -i -c "env -0"`, memoized with a TTL, falling back to
-  `process.env`) and uses it as the PTY spawn environment, so the deck behaves
+  environment once (Linux: `$SHELL -i -c "env -0"`; macOS: a login shell,
+  `$SHELL -l -i -c "env -0"`, which reads `~/.zprofile`; memoized with a TTL,
+  falling back to `process.env`) and uses it as the PTY spawn environment, so the deck behaves
   like a terminal however it was launched. It drops non-identifier names
   (`BASH_FUNC_*`) and logs only counts and causes, never values.
 

@@ -1,11 +1,9 @@
 name: macOS
 
-# MEASUREMENT mode: the smoke and the sweep never fail the job, the report step
-# prints every probe verdict (step summary, notice, one error per BAD probe) and
-# the artifact keeps test/*.out. The timeout is the envelope of 86 probes x 180 s.
+# Manual workflow: runs install + syntax gate + smoke + full sweep on macOS Apple Silicon
+# and Intel. Needs a public repo or Actions minutes (macOS minutes are billed on private
+# repos). A stub `claude` is put on PATH, since the hosted runner has no Claude Code.
 on:
-  push:
-    branches: [main, feat/macos-support]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +16,7 @@ jobs:
       matrix:
         os: [macos-latest, macos-15-intel]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 270
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -56,12 +54,10 @@ jobs:
           echo "$RUNNER_TEMP/stub-bin" >> "$GITHUB_PATH"
 
       - name: Smoke probe
-        continue-on-error: true
         run: bash test/run.sh boot-clean-probe
 
       - name: Probe sweep
         id: sweep
-        continue-on-error: true
         shell: bash
         run: |
           npm test 2>&1 | tee sweep.log; exit ${PIPESTATUS[0]}
