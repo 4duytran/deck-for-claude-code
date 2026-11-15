@@ -16,7 +16,7 @@
     "diff2html": "^3.4.56",
     "markdown-it": "^14.2.0",
     "node-pty": "^1.1.0",
-    "simple-git": "^3.36.0"
+    "simple-git": "^4.0.2"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",

@@ -266,7 +266,13 @@ async function run() {
     const trace = path.join(OUT, 'git-trace.log');
     fsp.readFile = function (p, ...rest) { reads.push(String(p)); return origReadFile.call(this, p, ...rest); };
     fs.readFileSync = function (p, ...rest) { reads.push(String(p)); return origReadSync.call(this, p, ...rest); };
-    process.env.GIT_TRACE = trace;
+    // simple-git 4 drops every ambient GIT_* variable from its child, so GIT_TRACE no longer reaches `git.raw()`; a `git` shim
+    // first on PATH (PATH is not filtered) logs the argv of every git call, simple-git's and execFile's alike.
+    const realGit = (process.env.PATH || '').split(path.delimiter).map((d) => path.join(d, 'git')).find((p) => fs.existsSync(p));
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-shim-'));
+    fs.writeFileSync(path.join(shimDir, 'git'), `#!/bin/sh\nprintf 'trace: git %s\\n' "$*" >> '${trace}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+    const origPath = process.env.PATH;
+    process.env.PATH = shimDir + path.delimiter + origPath;
     let wtOk; let wtOver; let cOk; let cOver;
     try {
       wtOk = await faShape(T, { file: 'cap-ok.txt', kind: 'unstaged' });
@@ -276,7 +282,7 @@ async function run() {
     } finally {
       fsp.readFile = origReadFile;
       fs.readFileSync = origReadSync;
-      delete process.env.GIT_TRACE;
+      process.env.PATH = origPath;
     }
     const tr = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf8') : '';
     const wantKeys = eq(wtOver.keys, KEYS_TEXT) && eq(cOver.keys, KEYS_TEXT);
