@@ -25,10 +25,10 @@
   "author": "Duy Tran",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/4duytran/claude-deck.git"
+    "url": "git+https://github.com/4duytran/deck-for-claude-code.git"
   },
   "bugs": {
-    "url": "https://github.com/4duytran/claude-deck/issues"
+    "url": "https://github.com/4duytran/deck-for-claude-code/issues"
   },
-  "homepage": "https://github.com/4duytran/claude-deck#readme"
+  "homepage": "https://github.com/4duytran/deck-for-claude-code#readme"
 }

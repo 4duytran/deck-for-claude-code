@@ -218,27 +218,21 @@ user to handle it, then rerun the check.
    `eval` line of step 2; for `claude`, the `export PATH=...` line its installer
    suggests) and rerun this check.
 
-7. **Clone the repository.** It is private for now: a plain
-   `git clone https://github.com/4duytran/claude-deck` fails without credentials,
-   so use an account that has access. With the GitHub CLI, from the folder where
-   the app should live:
+7. **Clone the repository.** From the folder where the app should live:
 
    ```bash
-   command -v gh >/dev/null 2>&1 || brew install gh
-   gh auth status >/dev/null 2>&1 || gh auth login
-   [ -d claude-deck ] || gh repo clone 4duytran/claude-deck
+   [ -d deck-for-claude-code ] || git clone https://github.com/4duytran/deck-for-claude-code
    ```
 
-   `gh auth login` is interactive (browser or one-time code): the user completes
-   it. An SSH clone also works when a key is registered on GitHub
-   (`git clone git@github.com:4duytran/claude-deck.git`).
+   An SSH clone also works when a key is registered on GitHub
+   (`git clone git@github.com:4duytran/deck-for-claude-code.git`).
 
-   Check: `ls claude-deck/package.json` finds the file.
+   Check: `ls deck-for-claude-code/package.json` finds the file.
 
 8. **Install the dependencies and the Electron binary.**
 
    ```bash
-   cd claude-deck
+   cd deck-for-claude-code
    npm install                 # builds node-pty from source for Electron (needs step 1)
    npx install-electron --no   # downloads the Electron binary (about 100 MB) to ~/Library/Caches/electron
    ```
@@ -258,7 +252,7 @@ user to handle it, then rerun the check.
    What you should see: the claude-deck window opens, with its session sidebar,
    and no dialog titled "claude-deck — missing prerequisites".
 
-Update later: `cd claude-deck && git pull && npm install`. Do not use `npm test` as
+Update later: `cd deck-for-claude-code && git pull && npm install`. Do not use `npm test` as
 an install check on macOS: the probe suite is Linux-first.
 
 #### Troubleshooting on macOS
@@ -277,8 +271,8 @@ an install check on macOS: the probe suite is Linux-first.
 ## Install
 
 ```bash
-git clone https://github.com/4duytran/claude-deck
-cd claude-deck
+git clone https://github.com/4duytran/deck-for-claude-code
+cd deck-for-claude-code
 npm install   # the postinstall step rebuilds node-pty for Electron (mandatory)
 npx install-electron --no   # downloads the Electron binary (about 100 MB; cached in ~/.cache/electron on Linux, ~/Library/Caches/electron on macOS)
 npm start

@@ -15,8 +15,8 @@ or newer, the Claude Code CLI, `jq`, and a C/C++ toolchain (`npm install` rebuil
 `node-pty` against Electron's ABI).
 
 ```bash
-git clone https://github.com/4duytran/claude-deck
-cd claude-deck
+git clone https://github.com/4duytran/deck-for-claude-code
+cd deck-for-claude-code
 npm install
 ```
 
@@ -164,7 +164,7 @@ Add a body after a blank line when the why is not obvious.
 
 ```bash
 git clone https://github.com/YOUR-USER/claude-deck
-cd claude-deck
+cd deck-for-claude-code
 git switch -c fix/scroll-on-focus
 git commit -m "fix: keep the scroll position when a pane regains focus"
 git push -u origin fix/scroll-on-focus
